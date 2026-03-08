@@ -50,4 +50,6 @@ export { createExportActions } from "./composables/useExport.js"
 export { useKeyboardShortcuts } from "./composables/useKeyboard.js"
 
 // Components
-export { default as OverlayRoot } from "./components/OverlayRoot.vue"
+import OverlayRoot from "./components/OverlayRoot.vue"
+
+export { OverlayRoot }

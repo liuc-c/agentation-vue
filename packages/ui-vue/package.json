@@ -1,6 +1,6 @@
 {
   "name": "@liuovo/agentation-vue-ui",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Vue 3 UI components: toolbar, overlay, popover, highlight & marker layers",
   "license": "PolyForm-Shield-1.0.0",
   "type": "module",
@@ -40,7 +40,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "vite build && tsc -p tsconfig.json --emitDeclarationOnly",
+    "build": "vite build && tsc -p tsconfig.json --emitDeclarationOnly && node ./scripts/copy-vue-dts.mjs",
     "test": "vitest run --config vitest.config.ts --passWithNoTests"
   },
   "dependencies": {
