@@ -15,6 +15,19 @@ Repository: `https://github.com/liuc-c/agentation-vue`
 This repository is a `pnpm` workspace. Most users only need
 `vite-plugin-agentation-vue`.
 
+## Acknowledgement
+
+`agentation-vue` is a Vue-focused refactor and extension of
+[`agentation`](https://github.com/benjitaylor/agentation) by
+[benjitaylor](https://github.com/benjitaylor). The original project shaped the
+core product direction and interaction model. This repository rebuilds that
+idea for Vue 3 and Vite, reorganizes the implementation into a Vue-oriented
+workspace, and adds Vue source tracing, a Vue overlay UI, and related tooling.
+
+Thanks to benjitaylor for creating and open-sourcing the original project.
+If you are comparing the two repositories, this one should be understood as a
+Vue ecosystem rework rather than an unrelated implementation.
+
 ## Features
 
 - Dev-only overlay injected automatically during `vite dev`

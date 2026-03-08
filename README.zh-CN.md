@@ -14,6 +14,18 @@
 这个仓库是一个 `pnpm` monorepo。对大多数使用者来说，推荐直接从
 `vite-plugin-agentation-vue` 接入。
 
+## 致谢与说明
+
+`agentation-vue` 是基于
+[`agentation`](https://github.com/benjitaylor/agentation) 进行的 Vue 方向
+重构与扩展项目，原项目作者为
+[benjitaylor](https://github.com/benjitaylor)。原始项目定义了这个工具的核心
+产品思路和交互方式；当前仓库则面向 Vue 3 与 Vite 生态重新组织实现，并在此基础
+上加入了 Vue 源码追踪、Vue 覆盖层 UI 以及相关配套能力。
+
+感谢 benjitaylor 开源原项目。如果对两个仓库进行对比，`agentation-vue`
+应当被理解为面向 Vue 生态的重构版本，而不是一个毫无关联的全新实现。
+
 ## 功能概览
 
 - 在 `vite dev` 阶段自动注入批注工具栏，生产构建默认关闭
