@@ -1,0 +1,175 @@
+import { reactive, watch } from "vue"
+import type { OutputDetailLevel } from "@liuovo/agentation-vue-core"
+import { DEFAULT_LOCALE, isValidLocale } from "../i18n/index.js"
+import type { ColorKey, Locale } from "../i18n/types.js"
+
+// ---------------------------------------------------------------------------
+// Settings state — persistent user preferences
+// ---------------------------------------------------------------------------
+
+const STORAGE_KEY = "agentation-vue-settings"
+
+export const COLOR_OPTIONS = [
+  { key: "purple" as const, value: "#AF52DE" },
+  { key: "blue" as const, value: "#3c82f7" },
+  { key: "cyan" as const, value: "#5AC8FA" },
+  { key: "green" as const, value: "#34C759" },
+  { key: "yellow" as const, value: "#FFD60A" },
+  { key: "orange" as const, value: "#FF9500" },
+  { key: "red" as const, value: "#FF3B30" },
+] as const satisfies ReadonlyArray<{ key: ColorKey; value: string }>
+
+export const DEFAULT_ANNOTATION_COLOR = "#3c82f7"
+
+export type CopyFormat = "json" | "markdown"
+
+export interface SettingsState {
+  /** Level of detail in export output. */
+  outputDetail: OutputDetailLevel
+  /** Whether dark mode is active. */
+  darkMode: boolean
+  /** Whether annotation mode is enabled on load. */
+  enabled: boolean
+  /** Whether component source resolution is shown. */
+  componentSourceEnabled: boolean
+  /** Accent colour for annotation markers. */
+  annotationColor: string
+  /** Whether annotation markers are visible. */
+  showMarkers: boolean
+  /** Preferred export format for copy actions. */
+  copyFormat: CopyFormat
+  /** Whether to clear annotations after a successful copy. */
+  autoClearAfterCopy: boolean
+  /** Whether page interactions are blocked while annotating. */
+  blockInteractions: boolean
+  /** Current UI locale. */
+  locale: Locale
+  /** Webhook endpoint URL. */
+  webhookUrl: string
+  /** Whether webhooks auto-send is enabled. */
+  webhooksEnabled: boolean
+
+  /** Toggle between dark and light mode. */
+  toggleDarkMode(): void
+}
+
+interface PersistedSettings {
+  outputDetail?: OutputDetailLevel
+  darkMode?: boolean
+  enabled?: boolean
+  componentSourceEnabled?: boolean
+  annotationColor?: string
+  showMarkers?: boolean
+  copyFormat?: CopyFormat
+  autoClearAfterCopy?: boolean
+  blockInteractions?: boolean
+  locale?: Locale
+  webhookUrl?: string
+  webhooksEnabled?: boolean
+}
+
+/**
+ * Creates the settings state with layered priority:
+ *   plugin config < localStorage < runtime toggle
+ */
+export function createSettingsState(defaults?: Partial<PersistedSettings>): SettingsState {
+  const persisted = loadSettings()
+
+  const state = reactive({
+    outputDetail: persisted.outputDetail ?? defaults?.outputDetail ?? "standard",
+    darkMode: persisted.darkMode ?? defaults?.darkMode ?? true,
+    enabled: persisted.enabled ?? defaults?.enabled ?? true,
+    componentSourceEnabled: persisted.componentSourceEnabled ?? defaults?.componentSourceEnabled ?? true,
+    annotationColor: persisted.annotationColor ?? defaults?.annotationColor ?? DEFAULT_ANNOTATION_COLOR,
+    showMarkers: persisted.showMarkers ?? defaults?.showMarkers ?? true,
+    copyFormat: persisted.copyFormat ?? defaults?.copyFormat ?? "markdown",
+    autoClearAfterCopy: persisted.autoClearAfterCopy ?? defaults?.autoClearAfterCopy ?? false,
+    blockInteractions: persisted.blockInteractions ?? defaults?.blockInteractions ?? true,
+    locale: normalizeLocale(persisted.locale) ?? normalizeLocale(defaults?.locale) ?? DEFAULT_LOCALE,
+    webhookUrl: persisted.webhookUrl ?? defaults?.webhookUrl ?? "",
+    webhooksEnabled: persisted.webhooksEnabled ?? defaults?.webhooksEnabled ?? false,
+  })
+
+  // Persist on every change
+  watch(
+    () => ({
+      outputDetail: state.outputDetail,
+      darkMode: state.darkMode,
+      enabled: state.enabled,
+      componentSourceEnabled: state.componentSourceEnabled,
+      annotationColor: state.annotationColor,
+      showMarkers: state.showMarkers,
+      copyFormat: state.copyFormat,
+      autoClearAfterCopy: state.autoClearAfterCopy,
+      blockInteractions: state.blockInteractions,
+      locale: state.locale,
+      webhookUrl: state.webhookUrl,
+      webhooksEnabled: state.webhooksEnabled,
+    }),
+    (settings) => saveSettings(settings),
+    { deep: true },
+  )
+
+  return {
+    get outputDetail() { return state.outputDetail },
+    set outputDetail(v: OutputDetailLevel) { state.outputDetail = v },
+    get darkMode() { return state.darkMode },
+    set darkMode(v: boolean) { state.darkMode = v },
+    get enabled() { return state.enabled },
+    set enabled(v: boolean) { state.enabled = v },
+    get componentSourceEnabled() { return state.componentSourceEnabled },
+    set componentSourceEnabled(v: boolean) { state.componentSourceEnabled = v },
+    get annotationColor() { return state.annotationColor },
+    set annotationColor(v: string) { state.annotationColor = v },
+    get showMarkers() { return state.showMarkers },
+    set showMarkers(v: boolean) { state.showMarkers = v },
+    get copyFormat() { return state.copyFormat },
+    set copyFormat(v: CopyFormat) { state.copyFormat = v },
+    get autoClearAfterCopy() { return state.autoClearAfterCopy },
+    set autoClearAfterCopy(v: boolean) { state.autoClearAfterCopy = v },
+    get blockInteractions() { return state.blockInteractions },
+    set blockInteractions(v: boolean) { state.blockInteractions = v },
+    get locale() { return state.locale },
+    set locale(v: Locale) { state.locale = normalizeLocale(v) ?? DEFAULT_LOCALE },
+    get webhookUrl() { return state.webhookUrl },
+    set webhookUrl(v: string) { state.webhookUrl = v },
+    get webhooksEnabled() { return state.webhooksEnabled },
+    set webhooksEnabled(v: boolean) { state.webhooksEnabled = v },
+
+    toggleDarkMode() {
+      state.darkMode = !state.darkMode
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// localStorage helpers
+// ---------------------------------------------------------------------------
+
+function normalizeLocale(value: unknown): Locale | undefined {
+  return isValidLocale(value) ? value : undefined
+}
+
+function loadSettings(): PersistedSettings {
+  if (typeof window === "undefined") return {}
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as PersistedSettings & { locale?: unknown }
+    return {
+      ...parsed,
+      locale: normalizeLocale(parsed.locale),
+    }
+  } catch {
+    return {}
+  }
+}
+
+function saveSettings(settings: PersistedSettings): void {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
+  } catch {
+    // silent — localStorage may be full or disabled
+  }
+}

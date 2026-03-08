@@ -1,0 +1,8 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/ui-vue" },
+    { "path": "./packages/vite-plugin-agentation-vue" }
+  ]
+}

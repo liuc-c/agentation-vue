@@ -1,0 +1,8 @@
+node_modules/.claude/settings.local.json
+node_modules
+dist
+.nuxt
+.output
+*.tsbuildinfo
+.DS_Store
+package/

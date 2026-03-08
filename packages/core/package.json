@@ -1,0 +1,39 @@
+{
+  "name": "@liuovo/agentation-vue-core",
+  "version": "0.0.1",
+  "description": "Framework-agnostic core: types, DOM identification, storage, transport, export",
+  "license": "PolyForm-Shield-1.0.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liuc-c/agentation-vue.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/liuc-c/agentation-vue/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/liuc-c/agentation-vue/issues"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./dom/freeze-animations": {
+      "types": "./dist/dom/freeze-animations.d.ts",
+      "import": "./dist/dom/freeze-animations.js",
+      "default": "./dist/dom/freeze-animations.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  }
+}
