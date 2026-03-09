@@ -315,6 +315,9 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
       VALUES (@id, @url, @status, @createdAt, @projectId, @metadata)
     `),
     getSession: db.prepare("SELECT * FROM sessions WHERE id = ?"),
+    updateSessionProjectId: db.prepare(`
+      UPDATE sessions SET project_id = @projectId, updated_at = @updatedAt WHERE id = @id
+    `),
     updateSessionStatus: db.prepare(`
       UPDATE sessions SET status = @status, updated_at = @updatedAt WHERE id = @id
     `),
@@ -458,6 +461,23 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
         ...rowToSession(sessionRow),
         annotations: annotationRows.map(rowToAnnotation),
       };
+    },
+
+    updateSessionProjectId(id: string, projectId?: string): Session | undefined {
+      const updatedAt = new Date().toISOString();
+      const result = stmts.updateSessionProjectId.run({
+        id,
+        projectId: projectId ?? null,
+        updatedAt,
+      });
+      if (result.changes === 0) return undefined;
+
+      const session = this.getSession(id);
+      if (session) {
+        const event = eventBus.emit("session.updated", id, session);
+        persistEvent(event);
+      }
+      return session;
     },
 
     updateSessionStatus(id: string, status: SessionStatus): Session | undefined {

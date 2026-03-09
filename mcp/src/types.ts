@@ -202,6 +202,7 @@ export interface AFSStore {
   getSession(id: string): Session | undefined;
   getSessionWithAnnotations(id: string): SessionWithAnnotations | undefined;
   getSessionWithAnnotationsV2(id: string): SessionWithAnnotationsV2 | undefined;
+  updateSessionProjectId(id: string, projectId?: string): Session | undefined;
   updateSessionStatus(id: string, status: SessionStatus): Session | undefined;
   listSessions(): Session[];
 

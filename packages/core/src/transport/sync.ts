@@ -48,6 +48,22 @@ export async function getSession(
   return response.json()
 }
 
+export async function updateSession(
+  endpoint: string,
+  sessionId: string,
+  data: { projectId: string },
+): Promise<Session> {
+  const response = await fetch(`${resolveV2Base(endpoint)}/sessions/${sessionId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to update session: ${response.status}`)
+  }
+  return response.json()
+}
+
 export async function syncAnnotation(
   endpoint: string,
   sessionId: string,

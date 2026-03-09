@@ -17,6 +17,7 @@ import {
   deleteAnnotationV2,
   updateAnnotationV2,
   updateAnnotationV2Status,
+  updateSessionProjectId,
 } from "./store.js"
 import { eventBus } from "./events.js"
 import {
@@ -385,6 +386,26 @@ const getSessionV2Handler: RouteHandler = async (_req, res, params) => {
   sendJson(res, 200, session)
 }
 
+const updateSessionV2Handler: RouteHandler = async (req, res, params) => {
+  try {
+    const body = await parseBody<{ projectId?: string }>(req)
+    const projectId = body.projectId?.trim()
+
+    if (!projectId) {
+      return sendError(res, 400, "projectId is required")
+    }
+
+    const session = updateSessionProjectId(params.id, projectId)
+    if (!session) {
+      return sendError(res, 404, "Session not found")
+    }
+
+    sendJson(res, 200, session)
+  } catch (error) {
+    sendError(res, 400, (error as Error).message)
+  }
+}
+
 const addAnnotationV2Handler: RouteHandler = async (req, res, params) => {
   try {
     const body = await parseBody<AnnotationV2>(req)
@@ -562,6 +583,12 @@ const routes: Route[] = [
     method: "GET",
     pattern: /^\/v2\/sessions\/([^/]+)$/,
     handler: getSessionV2Handler,
+    paramNames: ["id"],
+  },
+  {
+    method: "PATCH",
+    pattern: /^\/v2\/sessions\/([^/]+)$/,
+    handler: updateSessionV2Handler,
     paramNames: ["id"],
   },
   {

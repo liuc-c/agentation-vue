@@ -123,6 +123,19 @@ function createMemoryStore(): AFSStore {
       };
     },
 
+    updateSessionProjectId(id: string, projectId?: string): Session | undefined {
+      const session = sessions.get(id);
+      if (!session) return undefined;
+
+      session.projectId = projectId;
+      session.updatedAt = new Date().toISOString();
+
+      const event = eventBus.emit("session.updated", id, session);
+      events.push(event);
+
+      return session;
+    },
+
     updateSessionStatus(id: string, status: SessionStatus): Session | undefined {
       const session = sessions.get(id);
       if (!session) return undefined;
@@ -420,6 +433,10 @@ export function getSession(id: string): Session | undefined {
 
 export function getSessionWithAnnotations(id: string): SessionWithAnnotations | undefined {
   return getStore().getSessionWithAnnotations(id);
+}
+
+export function updateSessionProjectId(id: string, projectId?: string): Session | undefined {
+  return getStore().updateSessionProjectId(id, projectId);
 }
 
 export function updateSessionStatus(id: string, status: SessionStatus): Session | undefined {
