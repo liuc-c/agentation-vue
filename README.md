@@ -166,7 +166,7 @@ agentation({
   sync: {
     endpoint: "http://localhost:4747",
     mcpEndpoint: "http://localhost:4748", // optional, defaults to API port + 1
-    projectId: "demo-app",                // optional, defaults to the Vite root folder name
+    projectId: "demo-app",                // optional, defaults to workspace-name/relative-path or the Vite root folder name
     autoSync: true,
     debounceMs: 400,
     ensureServer: true,
@@ -208,7 +208,7 @@ The toolbar's `Get started` panel mirrors the runtime config and shows:
 Recommended local setup:
 
 1. Let all Vite projects share one Agentation server.
-2. The Vite plugin defaults `projectId` to the project folder name; set it explicitly only when you want a different scope.
+2. The Vite plugin defaults `projectId` to `workspace-name/relative-path` inside a monorepo, otherwise to the project folder name; set it explicitly only when you want a different scope.
 3. When multiple projects share the server, scope agent reads with `projectFilter`.
 4. Use webhook forwarding if you want external automations in addition to MCP.
 

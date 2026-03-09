@@ -97,6 +97,7 @@ The browser sync API provides a V2 REST API for the Vue toolbar and runtime:
 - `POST /v2/sessions` - Create a new session
 - `GET /v2/sessions` - List sessions, optionally `?projectFilter=...`
 - `GET /v2/sessions/:id` - Get one session with annotations
+- `PATCH /v2/sessions/:id` - Update session fields such as `projectId`
 
 ### Annotations
 - `POST /v2/sessions/:id/annotations` - Add annotation
