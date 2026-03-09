@@ -60,9 +60,6 @@ visual descriptions.
 | `playgrounds/vue-vite-demo` | Minimal Vite + Vue demo. |
 | `playgrounds/nuxt-demo` | Nuxt integration example. |
 
-Note: this repo still contains a legacy React package under `package/`. The
-Vue implementation lives under `packages/*` and `playgrounds/*`.
-
 ## Quick Start
 
 ### 1. Install the Vite plugin

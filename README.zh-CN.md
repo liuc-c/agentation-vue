@@ -54,9 +54,6 @@
 | `playgrounds/vue-vite-demo` | 最小 Vite + Vue 示例。 |
 | `playgrounds/nuxt-demo` | Nuxt 接入示例。 |
 
-补充说明：仓库里仍然保留了 `package/` 下的旧 React 包。当前 Vue 版的主要实现
-都在 `packages/*` 和 `playgrounds/*` 下。
-
 ## 快速开始
 
 ### 1. 安装 Vite 插件

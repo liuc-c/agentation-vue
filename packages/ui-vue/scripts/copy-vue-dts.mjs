@@ -1,6 +1,6 @@
 import { cp, mkdir, readdir } from "node:fs/promises"
 import { dirname, join, relative, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const srcDir = join(rootDir, "src")
@@ -20,10 +20,16 @@ async function collectVueDtsFiles(dir) {
   return files.flat()
 }
 
-for (const file of await collectVueDtsFiles(srcDir)) {
-  const relativePath = relative(srcDir, file)
-  const outputPath = join(distDir, relativePath)
+export async function copyVueDtsFiles() {
+  for (const file of await collectVueDtsFiles(srcDir)) {
+    const relativePath = relative(srcDir, file)
+    const outputPath = join(distDir, relativePath)
 
-  await mkdir(dirname(outputPath), { recursive: true })
-  await cp(file, outputPath)
+    await mkdir(dirname(outputPath), { recursive: true })
+    await cp(file, outputPath)
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await copyVueDtsFiles()
 }
