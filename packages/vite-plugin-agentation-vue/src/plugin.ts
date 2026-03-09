@@ -14,6 +14,7 @@ import {
   loadVirtualModule,
   resolveVirtualId,
 } from "./virtual.ts"
+import { createSharedServerSpawnSpec } from "./shared-server.ts"
 
 // ---------------------------------------------------------------------------
 // Terminal logging (ANSI colors + ASCII art)
@@ -137,29 +138,35 @@ function ensureSharedMcpServer(sync: AgentationVueSyncOptions): Promise<void> {
       return
     }
 
-    const command = process.platform === "win32" ? "npx.cmd" : "npx"
-    const child = spawn(
-      command,
-      [
-        "agentation-vue-mcp",
-        "server",
-        "--port",
-        String(apiPort),
-        "--mcp-port",
-        String(mcpPort),
-        "--no-stdio",
-      ],
-      {
+    const spawnSpec = createSharedServerSpawnSpec(apiPort, mcpPort)
+    if (!spawnSpec) {
+      logTerm(
+        "shared MCP auto-start skipped ⚠️",
+        "agentation-vue-mcp CLI not found; install the dependency or start the server manually",
+      )
+      return
+    }
+
+    try {
+      const child = spawn(spawnSpec.command, spawnSpec.args, {
         detached: true,
         stdio: "ignore",
         env: process.env,
-      },
-    )
+        windowsHide: true,
+      })
 
-    child.on("error", (error) => {
-      console.warn("[agentation] Failed to spawn shared MCP server:", error.message)
-    })
-    child.unref()
+      child.on("error", (error) => {
+        console.warn("[agentation] Failed to spawn shared MCP server:", error.message)
+      })
+      child.unref()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      logTerm(
+        "shared MCP auto-start skipped ⚠️",
+        `failed to spawn bundled MCP server: ${message}`,
+      )
+      return
+    }
 
     const ready = await waitForSharedServer(apiEndpoint, mcpEndpoint)
     if (ready) {

@@ -67,7 +67,9 @@ agentation({
 
 When `ensureServer` is enabled, the plugin health-checks the configured ports,
 reuses an existing Agentation server if one is already running, and otherwise
-spawns `agentation-vue-mcp server --no-stdio` during `vite dev`.
+launches the bundled `agentation-vue-mcp` CLI with the current Node runtime
+during `vite dev`. If auto-start is unavailable, the plugin logs a warning and
+continues so you can start the server manually.
 
 ## Nuxt Setup
 

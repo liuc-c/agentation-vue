@@ -1,5 +1,10 @@
-import vue from "@vitejs/plugin-vue";
-import { defineConfig } from "vitest/config";
+import vue from "@vitejs/plugin-vue"
+import { fileURLToPath } from "node:url"
+import { defineConfig } from "vitest/config"
+
+function projectRoot(path: string): string {
+  return fileURLToPath(new URL(path, import.meta.url))
+}
 
 export default defineConfig({
   test: {
@@ -8,7 +13,7 @@ export default defineConfig({
       {
         test: {
           name: "@liuovo/agentation-vue-core",
-          root: "./packages/core",
+          root: projectRoot("./packages/core"),
           environment: "node",
           include: ["src/**/*.test.ts"],
         },
@@ -17,7 +22,7 @@ export default defineConfig({
         plugins: [vue()],
         test: {
           name: "@liuovo/agentation-vue-ui",
-          root: "./packages/ui-vue",
+          root: projectRoot("./packages/ui-vue"),
           environment: "jsdom",
           include: ["src/**/*.test.ts"],
         },
@@ -25,11 +30,11 @@ export default defineConfig({
       {
         test: {
           name: "vite-plugin-agentation-vue",
-          root: "./packages/vite-plugin-agentation-vue",
+          root: projectRoot("./packages/vite-plugin-agentation-vue"),
           environment: "node",
           include: ["src/**/*.test.ts"],
         },
       },
     ],
   },
-});
+})

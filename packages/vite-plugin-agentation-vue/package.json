@@ -55,6 +55,7 @@
   "dependencies": {
     "@liuovo/agentation-vue-core": "workspace:*",
     "@liuovo/agentation-vue-ui": "workspace:*",
+    "agentation-vue-mcp": "workspace:*",
     "vite-plugin-vue-tracer": "^1.2.0"
   },
   "peerDependencies": {
