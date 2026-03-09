@@ -44,6 +44,7 @@
   ],
   "scripts": {
     "build": "node ./scripts/build.mjs",
+    "prepack": "pnpm build",
     "test": "vitest run --config vitest.config.ts --passWithNoTests"
   },
   "dependencies": {

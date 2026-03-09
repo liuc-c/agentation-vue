@@ -45,11 +45,11 @@
   },
   "files": [
     "dist",
-    "src/client.d.ts",
-    "src/runtime/"
+    "src/client.d.ts"
   ],
   "scripts": {
     "build": "tsc -b tsconfig.json",
+    "prepack": "pnpm build",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {

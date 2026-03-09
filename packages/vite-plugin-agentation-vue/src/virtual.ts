@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { dirname, resolve } from "node:path"
+import { basename, dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { normalizePath, type HtmlTagDescriptor } from "vite"
 import type { ResolvedAgentationVueOptions } from "./types.ts"
@@ -35,13 +35,35 @@ function logVirtual(message: string, detail?: string): void {
 
 /**
  * Resolves the `/@fs/…` path to the runtime entry file.
- * Prefers `src/runtime/entry.ts` (development) over `runtime/entry.ts` (dist).
+ * Uses the source runtime during workspace development and the built runtime
+ * from published `dist/` output when loaded from an installed package.
  */
+export function resolveRuntimeEntryFilePath(
+  thisDir = dirname(fileURLToPath(import.meta.url)),
+  fileExists: (path: string) => boolean = existsSync,
+): string {
+  const isSourceModule = basename(thisDir) === "src"
+  const candidates = isSourceModule
+    ? [
+        resolve(thisDir, "runtime/entry.ts"),
+        resolve(thisDir, "../dist/runtime/entry.js"),
+      ]
+    : [
+        resolve(thisDir, "runtime/entry.js"),
+        resolve(thisDir, "../src/runtime/entry.ts"),
+      ]
+
+  for (const candidate of candidates) {
+    if (fileExists(candidate)) {
+      return candidate
+    }
+  }
+
+  return candidates[0]
+}
+
 export function resolveRuntimeEntryPath(): string {
-  const thisDir = dirname(fileURLToPath(import.meta.url))
-  const srcEntry = resolve(thisDir, "../src/runtime/entry.ts")
-  const localEntry = resolve(thisDir, "runtime/entry.ts")
-  const entryFile = existsSync(srcEntry) ? srcEntry : localEntry
+  const entryFile = resolveRuntimeEntryFilePath()
   const normalized = normalizePath(entryFile)
   return normalized.startsWith("/")
     ? `/@fs${normalized}`
