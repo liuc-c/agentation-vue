@@ -256,7 +256,7 @@ describe("Toolbar", () => {
     await copySettingsButton!.trigger("click")
     await nextTick()
 
-    expect(wrapper.find('textarea[placeholder="Hi, help me revise the following"]').exists()).toBe(true)
+    expect(wrapper.find("textarea.copy-prefix-input").exists()).toBe(true)
     expect(wrapper.text()).toContain("Excluded fields")
     expect(wrapper.text()).toContain("Project area")
     expect(COPY_EXCLUDE_FIELDS).toContain("projectArea")

@@ -57,7 +57,7 @@ export const en: Messages = {
     copySettingsDescription: "Only affects clipboard copy. MCP and webhook payloads stay unchanged.",
     copyPrefix: "Prefix prompt",
     copyPrefixDescription: "Prepended before copied content with a line break.",
-    copyPrefixPlaceholder: "Hi, help me revise the following",
+    copyPrefixPlaceholder: "",
     copyExclusions: "Excluded fields",
     copyExclusionsDescription: "Checked fields are removed from copied output when they are present.",
     copyFieldLabels: {

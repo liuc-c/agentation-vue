@@ -27,7 +27,7 @@ describe("createSettingsState", () => {
       outputDetail: "forensic",
       darkMode: false,
       copyFormat: "json",
-      copyPrefix: "你好，帮我修改以下",
+      copyPrefix: "例如：你好，请帮我修改以下内容：",
       copyExcludeFields: ["projectArea", "framework"],
       blockInteractions: false,
       locale: "zh-CN",
@@ -35,7 +35,7 @@ describe("createSettingsState", () => {
     expect(state.outputDetail).toBe("forensic")
     expect(state.darkMode).toBe(false)
     expect(state.copyFormat).toBe("json")
-    expect(state.copyPrefix).toBe("你好，帮我修改以下")
+    expect(state.copyPrefix).toBe("例如：你好，请帮我修改以下内容：")
     expect(state.copyExcludeFields).toEqual(["projectArea", "framework"])
     expect(state.blockInteractions).toBe(false)
     expect(state.locale).toBe("zh-CN")

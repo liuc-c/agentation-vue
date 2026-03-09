@@ -103,14 +103,14 @@ describe("createExportActions", () => {
   it("applies copy prefix and field exclusions to copied markdown", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
-    settings.copyPrefix = "你好，帮我修改以下"
+    settings.copyPrefix = "例如：你好，请帮我修改以下内容："
     settings.copyExcludeFields = ["projectArea", "framework", "selectedText"]
 
     const actions = createExportActions(store, settings)
     await actions.exportMarkdown()
 
     const payload = writeText.mock.calls[0][0] as string
-    expect(payload.startsWith("你好，帮我修改以下\n## Page Feedback: /")).toBe(true)
+    expect(payload.startsWith("例如：你好，请帮我修改以下内容：\n## Page Feedback: /")).toBe(true)
     expect(payload).not.toContain("Project area")
     expect(payload).not.toContain("Framework")
     expect(payload).not.toContain("Selected text")

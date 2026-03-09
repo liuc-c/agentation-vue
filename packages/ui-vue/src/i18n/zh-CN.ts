@@ -57,7 +57,7 @@ export const zhCN: Messages = {
     copySettingsDescription: "仅作用于复制到剪贴板，不影响 MCP / Webhooks 的发送内容。",
     copyPrefix: "前缀提示词",
     copyPrefixDescription: "复制时会加在最前面，并自动换行。",
-    copyPrefixPlaceholder: "你好，帮我修改以下",
+    copyPrefixPlaceholder: "例如：你好，请帮我修改以下内容：",
     copyExclusions: "排除项",
     copyExclusionsDescription: "勾选后，复制时如果存在这些字段，就自动过滤掉不复制。",
     copyFieldLabels: {
