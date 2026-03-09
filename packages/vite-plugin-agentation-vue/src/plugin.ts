@@ -1,7 +1,10 @@
 import { spawn } from "node:child_process"
+import { existsSync, readFileSync } from "node:fs"
+import { basename, dirname, join, relative, resolve } from "node:path"
 import type { Plugin } from "vite"
 import VueTracer from "vite-plugin-vue-tracer"
 import {
+  DEFAULT_AGENTATION_SYNC_OPTIONS,
   resolveMcpEndpoint,
   resolveOptions,
   type AgentationVueOptions,
@@ -54,6 +57,60 @@ function logTerm(message: string, detail?: string): void {
 }
 
 const ensuredSharedServers = new Map<string, Promise<void>>()
+
+function hasWorkspaceMarker(dir: string): boolean {
+  if (
+    existsSync(join(dir, "pnpm-workspace.yaml"))
+    || existsSync(join(dir, "lerna.json"))
+    || existsSync(join(dir, "nx.json"))
+  ) {
+    return true
+  }
+
+  const packageJsonPath = join(dir, "package.json")
+  if (!existsSync(packageJsonPath)) {
+    return false
+  }
+
+  try {
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+      workspaces?: unknown
+    }
+    return packageJson.workspaces != null
+  } catch {
+    return false
+  }
+}
+
+function inferWorkspaceProjectId(rootDir?: string): string | undefined {
+  const trimmedRoot = rootDir?.trim()
+  if (!trimmedRoot) {
+    return undefined
+  }
+
+  const normalizedRoot = resolve(trimmedRoot)
+  let current = normalizedRoot
+
+  while (true) {
+    if (hasWorkspaceMarker(current)) {
+      const workspaceName = basename(current)
+      const relativeRoot = relative(current, normalizedRoot)
+        .split(/[\\/]+/)
+        .filter(Boolean)
+        .join("/")
+
+      return relativeRoot
+        ? `${workspaceName}/${relativeRoot}`
+        : workspaceName
+    }
+
+    const parent = dirname(current)
+    if (parent === current) {
+      return undefined
+    }
+    current = parent
+  }
+}
 
 function normalizeUrl(input: string): string {
   return input.replace(/\/+$/, "")
@@ -267,10 +324,40 @@ function createShellPlugin(options: AgentationVueOptions): Plugin {
     apply: "serve",
 
     configResolved(config) {
-      resolved = resolveOptions(options, config.command, config.root)
+      const configuredSync = options.sync === false ? undefined : options.sync
+      const inferredProjectId = configuredSync?.projectId?.trim()
+        ? undefined
+        : inferWorkspaceProjectId(config.root)
+
+      resolved = resolveOptions(
+        inferredProjectId
+          ? {
+              ...options,
+              ...(options.sync === false
+                ? {}
+                : {
+                    sync: {
+                      ...(configuredSync ?? {}),
+                      endpoint: configuredSync?.endpoint ?? DEFAULT_AGENTATION_SYNC_OPTIONS.endpoint,
+                      projectId: inferredProjectId,
+                    },
+                  }),
+            }
+          : options,
+        config.command,
+        config.root,
+      )
+
+      if (options.sync === false && inferredProjectId) {
+        resolved = {
+          ...resolved,
+          projectId: inferredProjectId,
+        }
+      }
+
       logTerm(
         resolved.enabled ? "configResolved ✅" : "configResolved ⏸️  plugin disabled",
-        `command=${config.command}${resolved.sync && resolved.sync.projectId ? ` projectId=${resolved.sync.projectId}` : ""}`,
+        `command=${config.command}${resolved.projectId ? ` projectId=${resolved.projectId}` : ""}`,
       )
     },
 

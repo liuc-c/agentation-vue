@@ -1,4 +1,5 @@
 import {
+  clearSessionId,
   createSession as apiCreateSession,
   deleteAnnotation as apiDeleteAnnotation,
   getSession as apiGetSession,
@@ -10,6 +11,7 @@ import {
   saveSessionId,
   syncAnnotation,
   updateAnnotation as apiUpdateAnnotation,
+  updateSession as apiUpdateSession,
 } from "@liuovo/agentation-vue-core"
 import type { AnnotationV2 } from "@liuovo/agentation-vue-core"
 import type {
@@ -33,15 +35,17 @@ export function createRuntimeSyncBridge(
   const debounceMs = sync.debounceMs ?? 400
   const listeners = new Set<(event: RuntimeSyncEvent) => void>()
   const mcpEndpoint = resolveMcpEndpoint(sync)
+  const desiredProjectId = sync.projectId?.trim() || undefined
   const info: RuntimeSyncInfo = {
     endpoint: sync.endpoint.replace(/\/+$/, ""),
     mcpEndpoint,
-    projectId: sync.projectId,
+    projectId: desiredProjectId,
     mcpHttpUrl: mcpEndpoint ? `${mcpEndpoint}/mcp` : undefined,
     mcpSseUrl: mcpEndpoint ? `${mcpEndpoint}/sse` : undefined,
   }
 
   let sessionId: string | undefined = loadSessionId(pathname(), storage.options) ?? undefined
+  let sessionVerified = false
   let currentPathname = pathname()
   let flushTimer: ReturnType<typeof setTimeout> | undefined
   let flushInFlight: Promise<void> | null = null
@@ -58,6 +62,53 @@ export function createRuntimeSyncBridge(
   function stopEventSource(): void {
     eventSource?.close()
     eventSource = null
+  }
+
+  async function ensureExistingSession(
+    sid: string,
+    path = currentPathname,
+  ): Promise<boolean> {
+    if (sessionVerified) {
+      ensureEventSource(sid)
+      return true
+    }
+
+    try {
+      const session = await apiGetSession(sync.endpoint, sid)
+      sessionVerified = true
+
+      const existingProjectId = session.projectId?.trim() || undefined
+
+      if (desiredProjectId && !existingProjectId) {
+        try {
+          await apiUpdateSession(sync.endpoint, sid, { projectId: desiredProjectId })
+        } catch (err) {
+          console.warn("[agentation] Failed to backfill session projectId:", sid, err)
+        }
+      } else if (desiredProjectId && existingProjectId !== desiredProjectId) {
+        clearSessionId(path, storage.options)
+        stopEventSource()
+        sessionId = undefined
+        sessionVerified = false
+        return false
+      }
+
+      ensureEventSource(sid)
+      return true
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("404")) {
+        clearSessionId(path, storage.options)
+        stopEventSource()
+        sessionId = undefined
+        sessionVerified = false
+        return false
+      }
+
+      console.warn("[agentation] Failed to verify existing session:", sid, err)
+      sessionVerified = true
+      ensureEventSource(sid)
+      return true
+    }
   }
 
   async function reconcileFromServer(
@@ -126,23 +177,31 @@ export function createRuntimeSyncBridge(
     currentPathname = current
     stopEventSource()
     sessionId = loadSessionId(current, storage.options) ?? undefined
+    sessionVerified = false
 
     if (sessionId) {
-      ensureEventSource(sessionId)
-      void reconcileFromServer(sessionId, "remote")
+      const sid = sessionId
+      void ensureExistingSession(sid, current).then((ready) => {
+        if (ready && sessionId === sid) {
+          void reconcileFromServer(sid, "remote")
+        }
+      })
     }
   }
 
   async function ensureSession(): Promise<string> {
     handlePathChange()
     if (sessionId) {
-      ensureEventSource(sessionId)
-      return sessionId
+      const ready = await ensureExistingSession(sessionId)
+      if (ready && sessionId) {
+        return sessionId
+      }
     }
 
     try {
-      const session = await apiCreateSession(sync.endpoint, window.location.href, sync.projectId)
+      const session = await apiCreateSession(sync.endpoint, window.location.href, desiredProjectId)
       sessionId = session.id
+      sessionVerified = true
       saveSessionId(pathname(), session.id, storage.options)
       ensureEventSource(session.id)
       return session.id
