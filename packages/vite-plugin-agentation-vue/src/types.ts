@@ -1,4 +1,3 @@
-import { basename, resolve } from "node:path"
 import {
   DEFAULT_STORAGE_PREFIX,
   type AnnotationV2,
@@ -70,12 +69,14 @@ export interface ResolvedAgentationVueOptions {
 }
 
 function inferProjectIdFromRoot(rootDir?: string): string | undefined {
-  if (!rootDir?.trim()) {
+  const normalizedRoot = rootDir?.trim().replace(/[\\/]+$/g, "")
+  if (!normalizedRoot) {
     return undefined
   }
 
-  const projectId = basename(resolve(rootDir))
-  if (!projectId || projectId === "." || projectId === "/") {
+  const segments = normalizedRoot.split(/[\\/]/).filter(Boolean)
+  const projectId = segments.at(-1)
+  if (!projectId || projectId === "." || projectId === ".." || /^[A-Za-z]:$/.test(projectId)) {
     return undefined
   }
 

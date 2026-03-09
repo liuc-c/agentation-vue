@@ -80,7 +80,6 @@ export interface Messages {
     manageMcpWebhooks: string
     getStarted: string
     mcpConnection: string
-    mcpDescription: string
     mcpLearnMore: string
     mcpStatusConnected: string
     mcpStatusDisconnected: string
@@ -97,15 +96,8 @@ export interface Messages {
     isolationTitle: string
     isolationDescription: string
     projectScopeLabel: string
-    apiEndpointLabel: string
     mcpHttpEndpointLabel: string
     mcpSseEndpointLabel: string
-    cliCommandLabel: string
-    claudeCommandLabel: string
-    cursorEndpointLabel: string
-    codexEndpointLabel: string
-    webhookEnvLabel: string
-    webhookDescriptionLong: string
     copyValueAria: (label: string) => string
   }
   colors: {

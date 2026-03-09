@@ -87,47 +87,11 @@ const settingsPanelPlacement = computed(
 )
 const mcpConnected = computed(() => !!bridge.sync)
 const syncInfo = computed(() => bridge.sync?.info)
-const apiEndpoint = computed(() => syncInfo.value?.endpoint ?? "http://localhost:4747")
 const mcpHttpEndpoint = computed(() => syncInfo.value?.mcpHttpUrl ?? "http://localhost:4748/mcp")
 const mcpSseEndpoint = computed(() => syncInfo.value?.mcpSseUrl ?? "http://localhost:4748/sse")
-const cliCommand = computed(() => {
-  const apiPort = extractPort(apiEndpoint.value) ?? 4747
-  const mcpPort = extractPort(syncInfo.value?.mcpEndpoint ?? "") ?? 4748
-  return `npx agentation-vue-mcp server --port ${apiPort} --mcp-port ${mcpPort}`
-})
-const claudeCommand = computed(() => {
-  const apiPort = extractPort(apiEndpoint.value) ?? 4747
-  const mcpPort = extractPort(syncInfo.value?.mcpEndpoint ?? "") ?? 4748
-  return `claude mcp add agentation -- npx agentation-vue-mcp server --port ${apiPort} --mcp-port ${mcpPort}`
-})
-const webhookTargets = computed(() => (
-  settings.webhooksEnabled
-    ? settings.webhookUrl
-      .split(/[\n,]/)
-      .map((item) => item.trim())
-      .filter(Boolean)
-    : []
-))
-const webhookEnv = computed(() => {
-  if (webhookTargets.value.length === 1) {
-    return `AGENTATION_WEBHOOK_URL=${webhookTargets.value[0]}`
-  }
-
-  if (webhookTargets.value.length > 1) {
-    return `AGENTATION_WEBHOOKS=${webhookTargets.value.join(",")}`
-  }
-
-  return "AGENTATION_WEBHOOK_URL=https://example.com/webhook\nAGENTATION_WEBHOOKS=https://a.example/webhook,https://b.example/webhook"
-})
 const connectionCards = computed(() => [
   { key: "mcp-http", label: messages.value.settings.mcpHttpEndpointLabel, value: mcpHttpEndpoint.value },
   { key: "mcp-sse", label: messages.value.settings.mcpSseEndpointLabel, value: mcpSseEndpoint.value },
-])
-const integrationCards = computed(() => [
-  { key: "cli-command", label: messages.value.settings.cliCommandLabel, value: cliCommand.value },
-  { key: "claude-command", label: messages.value.settings.claudeCommandLabel, value: claudeCommand.value },
-  { key: "cursor-endpoint", label: messages.value.settings.cursorEndpointLabel, value: mcpHttpEndpoint.value },
-  { key: "codex-endpoint", label: messages.value.settings.codexEndpointLabel, value: mcpSseEndpoint.value },
 ])
 
 // Sync toolbar expanded state → annotation mode.
@@ -248,7 +212,7 @@ function toggleCopyExcludedField(field: typeof COPY_EXCLUDE_FIELDS[number]): voi
 }
 
 watch(
-  [panelOpen, settingsPage, messages, mcpHttpEndpoint, mcpSseEndpoint, cliCommand, claudeCommand, webhookEnv, () => settings.copyExcludeFields.length],
+  [panelOpen, settingsPage, messages, mcpHttpEndpoint, mcpSseEndpoint, () => settings.copyExcludeFields.length],
   async ([isOpen]) => {
     if (!isOpen) {
       settingsPagesHeight.value = null
@@ -276,17 +240,6 @@ function exportCurrentFormat(): Promise<void> {
   return isMarkdownFormat.value
     ? props.exportActions.exportMarkdown()
     : props.exportActions.exportJSON()
-}
-
-function extractPort(input: string): number | null {
-  try {
-    const url = new URL(input)
-    const fallback = url.protocol === "https:" ? 443 : 80
-    const port = parseInt(url.port || String(fallback), 10)
-    return Number.isFinite(port) ? port : null
-  } catch {
-    return null
-  }
 }
 
 async function copyGuideValue(key: string, value: string): Promise<void> {
@@ -689,15 +642,6 @@ function getMaxSettingsPanelHeight(): number {
               </div>
 
               <div class="settings-section">
-                <div class="guide-card" :class="{ light: isLight }">
-                  <div class="guide-card-title">{{ messages.settings.mcpConnection }}</div>
-                  <p class="settings-description" :class="{ light: isLight }">
-                    {{ messages.settings.mcpDescription }}
-                  </p>
-                </div>
-              </div>
-
-              <div class="settings-section">
                 <div class="guide-grid">
                   <div v-for="item in connectionCards" :key="item.key" class="guide-card" :class="{ light: isLight }">
                     <div class="guide-card-header">
@@ -715,42 +659,6 @@ function getMaxSettingsPanelHeight(): number {
                 </div>
               </div>
 
-              <div class="settings-section">
-                <div class="guide-grid">
-                  <div v-for="item in integrationCards" :key="item.key" class="guide-card" :class="{ light: isLight }">
-                    <div class="guide-card-header">
-                      <div class="guide-card-title">{{ item.label }}</div>
-                      <button class="guide-copy-btn" :class="{ light: isLight }" type="button"
-                        :title="messages.settings.copyValueAria(item.label)"
-                        :aria-label="messages.settings.copyValueAria(item.label)"
-                        :data-copied="guideCopyFeedback === item.key || undefined"
-                        @click="void copyGuideValue(item.key, item.value)">
-                        <IconCopyAnimated :size="16" :copied="guideCopyFeedback === item.key" />
-                      </button>
-                    </div>
-                    <pre class="guide-code" :class="{ light: isLight }">{{ item.value }}</pre>
-                  </div>
-                </div>
-              </div>
-
-              <div class="settings-section">
-                <div class="guide-card" :class="{ light: isLight }">
-                  <div class="guide-card-header">
-                    <div class="guide-card-title">{{ messages.settings.webhookEnvLabel }}</div>
-                    <button class="guide-copy-btn" :class="{ light: isLight }" type="button"
-                      :title="messages.settings.copyValueAria(messages.settings.webhookEnvLabel)"
-                      :aria-label="messages.settings.copyValueAria(messages.settings.webhookEnvLabel)"
-                      :data-copied="guideCopyFeedback === 'webhook-env' || undefined"
-                      @click="void copyGuideValue('webhook-env', webhookEnv)">
-                      <IconCopyAnimated :size="16" :copied="guideCopyFeedback === 'webhook-env'" />
-                    </button>
-                  </div>
-                  <p class="settings-description" :class="{ light: isLight }">
-                    {{ messages.settings.webhookDescriptionLong }}
-                  </p>
-                  <pre class="guide-code" :class="{ light: isLight }">{{ webhookEnv }}</pre>
-                </div>
-              </div>
             </div>
           </div>
         </div>

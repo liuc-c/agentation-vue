@@ -279,7 +279,7 @@ describe("Toolbar", () => {
     expect(wrapper.text()).toContain("http://localhost:4748/mcp")
   })
 
-  it("restores webhook settings and derives webhook env from the configured URL", async () => {
+  it("restores webhook settings from the MCP & Webhooks page", async () => {
     const { wrapper, settings } = mountToolbar({ sync: true })
 
     await expandToolbar(wrapper)
@@ -293,6 +293,8 @@ describe("Toolbar", () => {
     expect(wrapper.text()).toContain("Webhooks")
     expect(wrapper.text()).toContain("MCP Connection")
     expect(wrapper.text()).toContain("Connected")
+    expect(wrapper.text()).not.toContain("CLI server")
+    expect(wrapper.text()).not.toContain("Claude CLI")
 
     await wrapper.find(".webhook-toggle input").setValue(true)
     await wrapper.find(".webhook-url").setValue("https://example.com/webhook")
@@ -300,7 +302,6 @@ describe("Toolbar", () => {
 
     expect(settings.webhooksEnabled).toBe(true)
     expect(settings.webhookUrl).toBe("https://example.com/webhook")
-    expect(wrapper.text()).toContain("AGENTATION_WEBHOOK_URL=https://example.com/webhook")
   })
 
   it("sizes the settings panel to the active page and caps tall pages", async () => {
@@ -339,7 +340,7 @@ describe("Toolbar", () => {
     expect(wrapper.find(".settings-pages").attributes("style")).toContain("height: 520px;")
   })
 
-  it("copies integration values from the MCP guide cards", async () => {
+  it("copies endpoint values from the MCP guide cards", async () => {
     const clipboardWrite = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -355,11 +356,11 @@ describe("Toolbar", () => {
     )
     expect(automationsButton).toBeDefined()
     await automationsButton!.trigger("click")
-    await wrapper.find('button[aria-label="Copy CLI server"]').trigger("click")
+    await wrapper.find('button[aria-label="Copy Streamable HTTP MCP"]').trigger("click")
     await nextTick()
 
-    expect(clipboardWrite).toHaveBeenCalledWith("npx agentation-vue-mcp server --port 4747 --mcp-port 4748")
-    expect(wrapper.find('button[aria-label="Copy CLI server"]').attributes("data-copied")).toBeDefined()
+    expect(clipboardWrite).toHaveBeenCalledWith("http://localhost:4748/mcp")
+    expect(wrapper.find('button[aria-label="Copy Streamable HTTP MCP"]').attributes("data-copied")).toBeDefined()
   })
 
   it("switches copy format in settings and updates the toolbar copy action", async () => {
