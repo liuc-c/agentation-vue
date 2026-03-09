@@ -35,6 +35,14 @@ export default defineConfig({
           include: ["src/**/*.test.ts"],
         },
       },
+      {
+        test: {
+          name: "agentation-vue-mcp",
+          root: projectRoot("./mcp"),
+          environment: "node",
+          include: ["src/**/*.test.ts"],
+        },
+      },
     ],
   },
 })

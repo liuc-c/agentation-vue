@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "http"
+import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "http"
 import { randomUUID } from "crypto"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js"
@@ -898,6 +898,7 @@ function createStreamableSession(): {
 } {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
+    enableJsonResponse: true,
   })
   const server = createToolServer()
   server.connect(transport)
@@ -1052,7 +1053,7 @@ async function handleLegacySse(req: IncomingMessage, res: ServerResponse): Promi
   res.end(JSON.stringify({ error: "Method not allowed" }))
 }
 
-export function startMcpHttpServer(port: number, baseUrl?: string): void {
+export function startMcpHttpServer(port: number, baseUrl?: string): HttpServer {
   if (baseUrl) {
     setHttpBaseUrl(baseUrl)
   }
@@ -1105,4 +1106,6 @@ export function startMcpHttpServer(port: number, baseUrl?: string): void {
       `[MCP] Agentation V2 transport listening on http://localhost:${port} (/mcp, /sse) -> API ${httpBaseUrl}`,
     )
   })
+
+  return server
 }
