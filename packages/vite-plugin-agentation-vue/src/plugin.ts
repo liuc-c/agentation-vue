@@ -81,6 +81,28 @@ async function isServerHealthy(baseUrl: string): Promise<boolean> {
   }
 }
 
+async function hasSessionEventsCapability(baseUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `${normalizeUrl(baseUrl)}/v2/sessions/__agentation_probe__/events`,
+      { signal: AbortSignal.timeout(800) },
+    )
+
+    if (response.ok) {
+      return true
+    }
+
+    if (response.status !== 404) {
+      return false
+    }
+
+    const body = await response.text()
+    return body.includes("Session not found")
+  } catch {
+    return false
+  }
+}
+
 async function waitForSharedServer(
   apiEndpoint: string,
   mcpEndpoint: string | undefined,
@@ -117,13 +139,22 @@ function ensureSharedMcpServer(sync: AgentationVueSyncOptions): Promise<void> {
   }
 
   const promise = (async () => {
-    const [apiHealthy, mcpHealthy] = await Promise.all([
+    const [apiHealthy, apiCompatible, mcpHealthy] = await Promise.all([
       isServerHealthy(apiEndpoint),
+      hasSessionEventsCapability(apiEndpoint),
       mcpEndpoint ? isServerHealthy(mcpEndpoint) : Promise.resolve(true),
     ])
 
-    if (apiHealthy && mcpHealthy) {
+    if (apiHealthy && apiCompatible && mcpHealthy) {
       logTerm("reusing shared MCP server ♻️", `${apiEndpoint}${mcpEndpoint ? ` + ${mcpEndpoint}` : ""}`)
+      return
+    }
+
+    if (apiHealthy && !apiCompatible) {
+      logTerm(
+        "shared MCP server incompatible ⚠️",
+        `${apiEndpoint} answered /health but is missing the required /v2 session event API; stop the old server or change sync ports`,
+      )
       return
     }
 

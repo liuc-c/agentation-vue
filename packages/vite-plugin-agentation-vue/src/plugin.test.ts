@@ -60,6 +60,49 @@ describe("agentation plugin shared server startup", () => {
 
     warnSpy.mockRestore()
   })
+
+  it("does not reuse an incompatible API server that lacks session events", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+
+      if (url === "http://localhost:4747/health") {
+        return new Response(null, { status: 200 })
+      }
+
+      if (url === "http://localhost:4747/v2/sessions/__agentation_probe__/events") {
+        return new Response('{"error":"Not found"}', {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+
+      if (url === "http://localhost:4748/health") {
+        return new Response(null, { status: 200 })
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    const { agentation } = await import("./plugin.ts")
+    const [shell] = agentation()
+    const configResolvedHook = getHookHandler<ResolvedConfig>(shell, "configResolved")
+    const configureServerHook = getHookHandler<ViteDevServer>(shell, "configureServer")
+
+    configResolvedHook?.({ command: "serve" } as never)
+
+    await expect(configureServerHook?.({
+      middlewares: {
+        use: useMock,
+      },
+    } as never)).resolves.toBeUndefined()
+
+    expect(spawnMock).not.toHaveBeenCalled()
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("shared MCP server incompatible"))
+    expect(useMock).toHaveBeenCalledTimes(1)
+
+    logSpy.mockRestore()
+  })
 })
 
 function getHookHandler<TArg>(
