@@ -69,7 +69,10 @@ export function runAgentationRuntime(options: ResolvedAgentationVueOptions): voi
 
   // 1. Infrastructure: DOM containers + storage + source resolver
   logBrowser("🏗️", "Setting up infrastructure", "DOM containers + storage bridge")
-  const infra = setupInfrastructure(options.storagePrefix)
+  const infra = setupInfrastructure(
+    options.storagePrefix,
+    options.projectId,
+  )
   const notificationListeners = new Set<(notification: UiNotification) => void>()
 
   // 2. Build the bridge for the UI layer

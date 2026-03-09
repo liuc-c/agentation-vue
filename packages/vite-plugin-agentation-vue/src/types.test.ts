@@ -34,6 +34,7 @@ describe("resolveOptions", () => {
   it("infers projectId from the Vite root directory", () => {
     const resolved = resolveOptions({}, "serve", `/tmp/${inferredProjectId}`)
 
+    expect(resolved.projectId).toBe(inferredProjectId)
     expect(resolved.sync).toMatchObject({
       projectId: inferredProjectId,
     })
@@ -50,6 +51,15 @@ describe("resolveOptions", () => {
     expect(resolved.sync).toMatchObject({
       projectId: "custom-project",
     })
+  })
+
+  it("keeps the inferred projectId available even when sync is disabled", () => {
+    const resolved = resolveOptions({
+      sync: false,
+    }, "serve", `/tmp/${inferredProjectId}`)
+
+    expect(resolved.sync).toBe(false)
+    expect(resolved.projectId).toBe(inferredProjectId)
   })
 
   it("allows explicit sync disable", () => {

@@ -84,10 +84,11 @@ export interface RuntimeInfrastructure {
  */
 export function setupInfrastructure(
   storagePrefix: string,
+  projectId?: string,
 ): RuntimeInfrastructure {
   const appMount = ensureShadowMount(APP_CONTAINER_ID, APP_ROOT_ID, "100000")
   const overlayMount = ensureShadowMount(OVERLAY_CONTAINER_ID, OVERLAY_ROOT_ID, "99999")
-  const storage = createStorageBridge(storagePrefix)
+  const storage = createStorageBridge(storagePrefix, projectId)
 
   function resolveSource(el: HTMLElement): SourceLocation | null {
     try {
@@ -699,12 +700,23 @@ function collectMatches(
 // Storage bridge
 // ---------------------------------------------------------------------------
 
-function createStorageBridge(prefix: string): AgentationStorageBridge {
+function createStorageBridge(prefix: string, projectId?: string): AgentationStorageBridge {
   const sessionPrefix = prefix
     ? (prefix.endsWith("-") ? `${prefix}session-` : `${prefix}-session-`)
     : "agentation-vue-session-"
 
-  const opts: StorageOptions = { prefix, sessionPrefix }
+  const namespace = projectId?.trim()
+    ? `${encodeURIComponent(projectId.trim())}:`
+    : undefined
+  const scopedPrefix = namespace ? `${prefix}${namespace}` : prefix
+  const scopedSessionPrefix = namespace ? `${sessionPrefix}${namespace}` : sessionPrefix
+
+  const opts: StorageOptions = {
+    prefix: scopedPrefix,
+    legacyPrefix: namespace ? prefix : undefined,
+    sessionPrefix: scopedSessionPrefix,
+    legacySessionPrefix: namespace ? sessionPrefix : undefined,
+  }
   const pathname = () => window.location.pathname
 
   return {

@@ -5,6 +5,7 @@ import {
   clearAnnotations,
   getUnsyncedAnnotations,
   markAnnotationsSynced,
+  getSessionStorageKey,
   loadSessionId,
   saveSessionId,
   clearSessionId,
@@ -77,6 +78,21 @@ describe("storage", () => {
       saveAnnotations("/test", [makeAnnotation("x")], opts)
       expect(storage.getItem("custom-/test")).toBeTruthy()
     })
+
+    it("falls back to legacy annotation keys and migrates them", () => {
+      storage.setItem("agentation-vue-/demo", JSON.stringify([makeAnnotation("legacy")]))
+
+      const loaded = loadAnnotations("/demo", {
+        storage,
+        prefix: "agentation-vue-demo-app:",
+        legacyPrefix: "agentation-vue-",
+      })
+
+      expect(loaded).toHaveLength(1)
+      expect(loaded[0].id).toBe("legacy")
+      expect(storage.getItem("agentation-vue-demo-app:/demo")).toContain("legacy")
+      expect(storage.getItem("agentation-vue-/demo")).toBeNull()
+    })
   })
 
   describe("clearAnnotations", () => {
@@ -133,6 +149,33 @@ describe("storage", () => {
       clearSessionId("/", { storage })
       expect(loadSessionId("/", { storage })).toBeNull()
     })
+
+    it("falls back to legacy session keys and migrates them", () => {
+      storage.setItem("agentation-vue-session-/", "sess-legacy")
+
+      const loaded = loadSessionId("/", {
+        storage,
+        sessionPrefix: "agentation-vue-session-demo-app:",
+        legacySessionPrefix: "agentation-vue-session-",
+      })
+
+      expect(loaded).toBe("sess-legacy")
+      expect(storage.getItem("agentation-vue-session-demo-app:/")).toBe("sess-legacy")
+      expect(storage.getItem("agentation-vue-session-/")).toBeNull()
+    })
+
+    it("removes legacy session keys after writing the new key", () => {
+      storage.setItem("agentation-vue-session-/", "sess-legacy")
+
+      saveSessionId("/", "sess-next", {
+        storage,
+        sessionPrefix: "agentation-vue-session-demo-app:",
+        legacySessionPrefix: "agentation-vue-session-",
+      })
+
+      expect(storage.getItem("agentation-vue-session-demo-app:/")).toBe("sess-next")
+      expect(storage.getItem("agentation-vue-session-/")).toBeNull()
+    })
   })
 
   describe("loadAllAnnotations", () => {
@@ -145,6 +188,21 @@ describe("storage", () => {
       expect(all.get("/a")).toHaveLength(1)
       expect(all.get("/b")).toHaveLength(2)
     })
+
+    it("keeps pathname parsing working with a namespaced prefix", () => {
+      saveAnnotations("/a", [makeAnnotation("a1")], {
+        storage,
+        prefix: "agentation-vue-demo-app:",
+      })
+
+      const all = loadAllAnnotations({
+        storage,
+        prefix: "agentation-vue-demo-app:",
+      })
+
+      expect(all.size).toBe(1)
+      expect(all.get("/a")).toHaveLength(1)
+    })
   })
 
   describe("getStorageKey", () => {
@@ -154,6 +212,10 @@ describe("storage", () => {
 
     it("uses custom prefix", () => {
       expect(getStorageKey("/page", { prefix: "my-" })).toBe("my-/page")
+    })
+
+    it("uses custom session prefix", () => {
+      expect(getSessionStorageKey("/page", { sessionPrefix: "session-demo:" })).toBe("session-demo:/page")
     })
   })
 })

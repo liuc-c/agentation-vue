@@ -50,6 +50,12 @@ describe("setupInfrastructure", () => {
 
     expect(appHost?.shadowRoot).not.toBeNull()
     expect(overlayHost?.shadowRoot).not.toBeNull()
+    expect(infra.storage.options).toEqual({
+      prefix: "agentation-test-",
+      legacyPrefix: undefined,
+      sessionPrefix: "agentation-test-session-",
+      legacySessionPrefix: undefined,
+    })
     expect(appHost?.shadowRoot?.getElementById("agentation-app-root")).toBe(infra.appRoot)
     expect(overlayHost?.shadowRoot?.getElementById("agentation-overlay-root")).toBe(infra.overlayRoot)
     expect(appHost?.style.pointerEvents).toBe("none")
@@ -93,6 +99,21 @@ describe("setupInfrastructure", () => {
     expect(overlayStylesheet?.getAttribute("href")).toBe("/assets/agentation-ui.raw.css")
     expect(appHost?.shadowRoot?.querySelector("style[data-agentation-shadow-style]")).toBeNull()
     expect(overlayHost?.shadowRoot?.querySelector("style[data-agentation-shadow-style]")).toBeNull()
+
+    infra.cleanup()
+  })
+
+  it("namespaces storage keys by projectId while preserving legacy prefixes", async () => {
+    const { setupInfrastructure } = await loadBootstrap()
+
+    const infra = setupInfrastructure("agentation-test-", "workspace/demo-app")
+
+    expect(infra.storage.options).toEqual({
+      prefix: "agentation-test-workspace%2Fdemo-app:",
+      legacyPrefix: "agentation-test-",
+      sessionPrefix: "agentation-test-session-workspace%2Fdemo-app:",
+      legacySessionPrefix: "agentation-test-session-",
+    })
 
     infra.cleanup()
   })

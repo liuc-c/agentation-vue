@@ -62,6 +62,7 @@ export type AgentationVuePluginOptions = AgentationVueOptions
 export interface ResolvedAgentationVueOptions {
   enabled: boolean
   storagePrefix: string
+  projectId?: string
   outputDetail: OutputDetailLevel
   locale: Locale
   sync: AgentationVueSyncOptions | false
@@ -88,17 +89,20 @@ export function resolveOptions(
   command: "serve" | "build" = "serve",
   rootDir?: string,
 ): ResolvedAgentationVueOptions {
+  const configuredSync = raw.sync === false ? undefined : raw.sync
+  const projectId = configuredSync?.projectId?.trim() || inferProjectIdFromRoot(rootDir)
   const resolvedSync = raw.sync === false
     ? false
     : {
         ...DEFAULT_AGENTATION_SYNC_OPTIONS,
-        ...raw.sync,
-        projectId: raw.sync?.projectId?.trim() || inferProjectIdFromRoot(rootDir),
+        ...configuredSync,
+        projectId,
       }
 
   return {
     enabled: raw.enabled ?? (command === "serve"),
     storagePrefix: raw.storagePrefix ?? DEFAULT_STORAGE_PREFIX,
+    projectId,
     outputDetail: raw.outputDetail ?? "standard",
     locale: raw.locale ?? "en",
     sync: resolvedSync,

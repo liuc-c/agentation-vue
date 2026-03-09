@@ -7,7 +7,9 @@ export const DEFAULT_RETENTION_DAYS = 7
 export interface StorageOptions {
   storage?: Storage
   prefix?: string
+  legacyPrefix?: string
   sessionPrefix?: string
+  legacySessionPrefix?: string
   retentionDays?: number
 }
 
@@ -44,6 +46,70 @@ export function getStorageKey(
   return `${options.prefix ?? DEFAULT_STORAGE_PREFIX}${pathname}`
 }
 
+function getLegacyStorageKey(
+  pathname: string,
+  options: StorageOptions,
+): string | undefined {
+  if (!options.legacyPrefix) return undefined
+  return `${options.legacyPrefix}${pathname}`
+}
+
+function getLegacySessionStorageKey(
+  pathname: string,
+  options: StorageOptions,
+): string | undefined {
+  if (!options.legacySessionPrefix) return undefined
+  return `${options.legacySessionPrefix}${pathname}`
+}
+
+function readStorageValue(storage: Storage, key: string): string | null {
+  try {
+    return storage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function removeStorageValue(storage: Storage, key: string | undefined): void {
+  if (!key) return
+
+  try {
+    storage.removeItem(key)
+  } catch {
+    // silent
+  }
+}
+
+function migrateStorageValue(
+  storage: Storage,
+  nextKey: string,
+  legacyKey: string,
+  value: string,
+): void {
+  try {
+    storage.setItem(nextKey, value)
+    storage.removeItem(legacyKey)
+  } catch {
+  }
+}
+
+function loadStorageValueWithFallback(
+  storage: Storage,
+  nextKey: string,
+  legacyKey: string | undefined,
+): string | null {
+  const nextValue = readStorageValue(storage, nextKey)
+  if (nextValue != null || !legacyKey || legacyKey === nextKey) {
+    return nextValue
+  }
+
+  const legacyValue = readStorageValue(storage, legacyKey)
+  if (legacyValue == null) return null
+
+  migrateStorageValue(storage, nextKey, legacyKey, legacyValue)
+  return legacyValue
+}
+
 export function loadAnnotations<T extends { timestamp?: string | number } = AnnotationV2>(
   pathname: string,
   options: StorageOptions = {},
@@ -52,7 +118,11 @@ export function loadAnnotations<T extends { timestamp?: string | number } = Anno
   if (!storage) return []
 
   try {
-    const raw = storage.getItem(getStorageKey(pathname, options))
+    const raw = loadStorageValueWithFallback(
+      storage,
+      getStorageKey(pathname, options),
+      getLegacyStorageKey(pathname, options),
+    )
     if (!raw) return []
     const parsed = JSON.parse(raw) as T[]
     return filterRecent(parsed, options.retentionDays ?? DEFAULT_RETENTION_DAYS)
@@ -71,6 +141,7 @@ export function saveAnnotations<T = AnnotationV2>(
 
   try {
     storage.setItem(getStorageKey(pathname, options), JSON.stringify(annotations))
+    removeStorageValue(storage, getLegacyStorageKey(pathname, options))
   } catch {
     // silent — localStorage may be full or disabled
   }
@@ -85,6 +156,7 @@ export function clearAnnotations(
 
   try {
     storage.removeItem(getStorageKey(pathname, options))
+    removeStorageValue(storage, getLegacyStorageKey(pathname, options))
   } catch {
     // silent
   }
@@ -188,11 +260,11 @@ export function loadSessionId(
   const storage = resolveStorage(options.storage)
   if (!storage) return null
 
-  try {
-    return storage.getItem(getSessionStorageKey(pathname, options))
-  } catch {
-    return null
-  }
+  return loadStorageValueWithFallback(
+    storage,
+    getSessionStorageKey(pathname, options),
+    getLegacySessionStorageKey(pathname, options),
+  )
 }
 
 export function saveSessionId(
@@ -205,6 +277,7 @@ export function saveSessionId(
 
   try {
     storage.setItem(getSessionStorageKey(pathname, options), sessionId)
+    removeStorageValue(storage, getLegacySessionStorageKey(pathname, options))
   } catch {
     // silent
   }
@@ -219,6 +292,7 @@ export function clearSessionId(
 
   try {
     storage.removeItem(getSessionStorageKey(pathname, options))
+    removeStorageValue(storage, getLegacySessionStorageKey(pathname, options))
   } catch {
     // silent
   }
