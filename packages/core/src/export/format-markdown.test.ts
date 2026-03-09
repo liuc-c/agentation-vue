@@ -26,10 +26,28 @@ describe("formatToMarkdown", () => {
     expect(formatToMarkdown([])).toBe("")
   })
 
-  it("compact format uses numbered list", () => {
-    const md = formatToMarkdown([makeAnnotation()], { detailLevel: "compact" })
-    expect(md).toContain("1. **button**:")
+  it("compact format uses numbered list and includes source in parentheses", () => {
+    const md = formatToMarkdown([makeAnnotation({
+      source: {
+        framework: "vue",
+        componentName: "App",
+        file: "src/App.vue",
+        line: 10,
+        column: 22,
+        resolver: "vue-tracer",
+      },
+    })], { detailLevel: "compact" })
+    expect(md).toContain("1. **button** (src/App.vue:10:22):")
     expect(md).toContain("Fix this button")
+  })
+
+  it("compact format omits source when sourceLocation is excluded", () => {
+    const md = formatToMarkdown([makeAnnotation()], {
+      detailLevel: "compact",
+      excludeFields: ["sourceLocation"],
+    })
+    expect(md).toContain("1. **button**: Fix this button")
+    expect(md).not.toContain("src/App.vue")
   })
 
   it("standard format includes source and component", () => {

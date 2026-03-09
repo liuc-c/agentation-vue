@@ -51,6 +51,8 @@ export type { ExportActions, ExportFormat } from "./composables/useExport.js"
 export { createExportActions } from "./composables/useExport.js"
 export { useKeyboardShortcuts } from "./composables/useKeyboard.js"
 
+export const AGENTATION_UI_STYLE_HREF = ""
+
 // Components
 import OverlayRoot from "./components/OverlayRoot.vue"
 

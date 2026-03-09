@@ -55,6 +55,12 @@ function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}...`
 }
 
+function fmtSourceLocation(source: AnnotationV2["source"], includeColumn = true): string {
+  if (source.line == null) return source.file
+  if (includeColumn && source.column != null) return `${source.file}:${source.line}:${source.column}`
+  return `${source.file}:${source.line}`
+}
+
 function meta(a: AnnotationV2): AnnotationMetadata {
   return (a.metadata ?? {}) as AnnotationMetadata
 }
@@ -107,7 +113,11 @@ export function formatToMarkdown(
 
     // ── compact ──
     if (detailLevel === "compact") {
-      output += `${num}. **${a.elementSelector}**: ${a.comment}`
+      output += `${num}. **${a.elementSelector}**`
+      if (src.file && !isExcluded(excluded, "sourceLocation")) {
+        output += ` (${fmtSourceLocation(src)})`
+      }
+      output += `: ${a.comment}`
       if (selectedText) {
         output += ` (re: "${truncate(selectedText, 30)}")`
       }
@@ -124,10 +134,7 @@ export function formatToMarkdown(
       if (m.project_area && !isExcluded(excluded, "projectArea")) output += `**Project area:** ${m.project_area}\n`
       if (m.context_hints?.length && !isExcluded(excluded, "contextHints")) output += `**Context hints:** ${m.context_hints.join(" | ")}\n`
       if (src.file && !isExcluded(excluded, "sourceLocation")) {
-        const loc = src.line != null
-          ? (src.column != null ? `${src.file}:${src.line}:${src.column}` : `${src.file}:${src.line}`)
-          : src.file
-        output += `**Source:** ${loc}\n`
+        output += `**Source:** ${fmtSourceLocation(src)}\n`
       }
       if (src.componentName && !isExcluded(excluded, "component")) output += `**Component:** ${src.componentName}\n`
       if (src.componentHierarchy && !isExcluded(excluded, "componentHierarchy")) output += `**Component hierarchy:** ${src.componentHierarchy}\n`
@@ -155,8 +162,7 @@ export function formatToMarkdown(
 
     if (m.project_area && !isExcluded(excluded, "projectArea")) output += `**Project area:** ${m.project_area}\n`
     if (src.file && !isExcluded(excluded, "sourceLocation")) {
-      const loc = src.line != null ? `${src.file}:${src.line}` : src.file
-      output += `**Source:** ${loc}\n`
+      output += `**Source:** ${fmtSourceLocation(src, false)}\n`
     }
     if (src.componentName && !isExcluded(excluded, "component")) output += `**Component:** ${src.componentName}\n`
     if (m.elementPath && !isExcluded(excluded, "elementPath")) output += `**Location:** ${m.elementPath}\n`

@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it } from "vitest"
-import { injectCssImportIntoChunk } from "./inject-css-import.mjs"
+import { injectBuiltStyleHref, injectCssImportIntoChunk } from "./inject-css-import.mjs"
 
 describe("injectCssImportIntoChunk", () => {
   it("injects the built stylesheet before the sourcemap comment", () => {
@@ -43,5 +43,31 @@ describe("injectCssImportIntoChunk", () => {
     ].join("\n")
 
     expect(injectCssImportIntoChunk(source)).toBe(source)
+  })
+
+  it("injects the raw built css href into the published entry placeholder", () => {
+    const source = [
+      'export const AGENTATION_UI_STYLE_HREF = "";',
+      "export { AGENTATION_UI_STYLE_HREF }",
+    ].join("\n")
+
+    expect(injectBuiltStyleHref(source)).toBe([
+      'export const AGENTATION_UI_STYLE_HREF = new URL("./index.raw.css", import.meta.url).href;',
+      "export { AGENTATION_UI_STYLE_HREF }",
+    ].join("\n"))
+  })
+
+  it("injects the raw built css href into the bundled alias export", () => {
+    const source = [
+      'const helper = 1;',
+      'Hs = "";',
+      'export {',
+      '  Hs as AGENTATION_UI_STYLE_HREF,',
+      '}',
+    ].join("\n")
+
+    expect(injectBuiltStyleHref(source)).toContain(
+      'Hs = new URL("./index.raw.css", import.meta.url).href;',
+    )
   })
 })

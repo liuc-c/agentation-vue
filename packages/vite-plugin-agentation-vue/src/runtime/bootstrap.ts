@@ -15,7 +15,7 @@ import type {
   SettingsState,
   UiNotification,
 } from "@liuovo/agentation-vue-ui"
-import { resolveMessages } from "@liuovo/agentation-vue-ui"
+import { AGENTATION_UI_STYLE_HREF, resolveMessages } from "@liuovo/agentation-vue-ui"
 import type { AgentationStorageBridge } from "../types.ts"
 import { resolveElementSource } from "./resolver/index.ts"
 
@@ -451,6 +451,15 @@ function syncUiStylesToShadowRoot(
       node.remove()
     })
 
+    if (AGENTATION_UI_STYLE_HREF) {
+      const stylesheet = document.createElement("link")
+      stylesheet.rel = "stylesheet"
+      stylesheet.href = AGENTATION_UI_STYLE_HREF
+      stylesheet.setAttribute(UI_STYLE_MARKER, "")
+      shadowRoot.insertBefore(stylesheet, root)
+      return
+    }
+
     for (const node of getUiStyleNodes()) {
       const clone = node.cloneNode(true) as HTMLStyleElement | HTMLLinkElement
       clone.setAttribute(UI_STYLE_MARKER, "")
@@ -459,6 +468,10 @@ function syncUiStylesToShadowRoot(
   }
 
   sync()
+
+  if (AGENTATION_UI_STYLE_HREF) {
+    return () => {}
+  }
 
   const observer = new MutationObserver(() => {
     sync()
