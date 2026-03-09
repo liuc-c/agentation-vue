@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-agentation-vue",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Vite plugin: one-line setup for agentation-vue (runtime injection + Vue source resolver)",
   "license": "PolyForm-Shield-1.0.0",
   "type": "module",
