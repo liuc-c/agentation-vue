@@ -3,6 +3,8 @@ export type {
   RuntimeBridge,
   RuntimeStorageBridge,
   RuntimeSyncBridge,
+  RuntimeSyncEvent,
+  RuntimeSyncInfo,
   UiNotification,
   BoundingBox,
   AreaSelectionRect,

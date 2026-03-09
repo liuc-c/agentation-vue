@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest"
 import { mount } from "@vue/test-utils"
 import { nextTick, reactive, ref } from "vue"
 import Toolbar from "./Toolbar.vue"
+import { COPY_EXCLUDE_FIELDS } from "../copy-fields.js"
 import {
   ANNOTATIONS_STORE_KEY,
   FREEZE_KEY,
@@ -78,6 +79,8 @@ function makeProvides(options?: {
     annotationColor: "#3c82f7",
     showMarkers: options?.showMarkers ?? true,
     copyFormat: options?.copyFormat ?? "markdown",
+    copyPrefix: "",
+    copyExcludeFields: [],
     autoClearAfterCopy: false,
     blockInteractions: true,
     locale: "en",
@@ -109,10 +112,19 @@ function makeProvides(options?: {
 
   if (options?.sync) {
     bridge.sync = {
+      info: {
+        endpoint: "http://localhost:4747",
+        mcpEndpoint: "http://localhost:4748",
+        mcpHttpUrl: "http://localhost:4748/mcp",
+        mcpSseUrl: "http://localhost:4748/sse",
+        projectId: "demo-app",
+      },
       init: vi.fn().mockResolvedValue(undefined),
       enqueueUpsert: vi.fn(),
       enqueueUpdate: vi.fn(),
       enqueueDelete: vi.fn(),
+      subscribe: vi.fn().mockReturnValue(() => {}),
+      dispose: vi.fn(),
     }
   }
 
@@ -209,17 +221,145 @@ describe("Toolbar", () => {
     expect(wrapper.find(".settings-panel").exists()).toBe(false)
   })
 
+  it("keeps settings open when the pointerdown originates inside the toolbar composed path", async () => {
+    const { wrapper } = mountToolbar()
+
+    await expandToolbar(wrapper)
+    await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
+
+    const panel = wrapper.find(".settings-panel")
+    const toolbar = wrapper.find(".toolbar")
+    const event = new Event("pointerdown", { bubbles: true, composed: true })
+
+    Object.defineProperty(event, "composedPath", {
+      configurable: true,
+      value: () => [panel.element, toolbar.element, document.body, document, window],
+    })
+
+    document.dispatchEvent(event)
+    await nextTick()
+
+    expect(wrapper.find(".settings-panel").exists()).toBe(true)
+  })
+
+  it("opens the copy settings page from settings navigation", async () => {
+    const { wrapper } = mountToolbar({ annotations: [makeAnnotation()] })
+
+    await expandToolbar(wrapper)
+    await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
+
+    const copySettingsButton = wrapper.findAll(".nav-btn").find(
+      (button) => button.text().includes("Copy content settings"),
+    )
+
+    expect(copySettingsButton).toBeDefined()
+    await copySettingsButton!.trigger("click")
+    await nextTick()
+
+    expect(wrapper.find('textarea[placeholder="Hi, help me revise the following"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain("Excluded fields")
+    expect(wrapper.text()).toContain("Project area")
+    expect(COPY_EXCLUDE_FIELDS).toContain("projectArea")
+  })
+
   it("opens the MCP & Webhooks page from settings navigation", async () => {
     const { wrapper } = mountToolbar({ sync: true })
 
     await expandToolbar(wrapper)
     expect(wrapper.find('button[aria-label="Manage MCP & Webhooks"]').exists()).toBe(false)
     await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
-    await wrapper.find(".nav-btn").trigger("click")
+    const automationsButton = wrapper.findAll(".nav-btn").find(
+      (button) => button.text().includes("Manage MCP & Webhooks"),
+    )
+    expect(automationsButton).toBeDefined()
+    await automationsButton!.trigger("click")
 
-    expect(wrapper.find(".settings-pages").classes()).toContain("show-automations")
-    expect(wrapper.find(".back-btn").text()).toContain("Manage MCP & Webhooks")
+    expect(wrapper.findAll(".back-btn")[1]!.text()).toContain("Manage MCP & Webhooks")
     expect(wrapper.find(".mcp-status").text()).toContain("Connected")
+    expect(wrapper.text()).toContain("http://localhost:4748/mcp")
+  })
+
+  it("restores webhook settings and derives webhook env from the configured URL", async () => {
+    const { wrapper, settings } = mountToolbar({ sync: true })
+
+    await expandToolbar(wrapper)
+    await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
+    const automationsButton = wrapper.findAll(".nav-btn").find(
+      (button) => button.text().includes("Manage MCP & Webhooks"),
+    )
+    expect(automationsButton).toBeDefined()
+    await automationsButton!.trigger("click")
+
+    expect(wrapper.text()).toContain("Webhooks")
+    expect(wrapper.text()).toContain("MCP Connection")
+    expect(wrapper.text()).toContain("Connected")
+
+    await wrapper.find(".webhook-toggle input").setValue(true)
+    await wrapper.find(".webhook-url").setValue("https://example.com/webhook")
+    await nextTick()
+
+    expect(settings.webhooksEnabled).toBe(true)
+    expect(settings.webhookUrl).toBe("https://example.com/webhook")
+    expect(wrapper.text()).toContain("AGENTATION_WEBHOOK_URL=https://example.com/webhook")
+  })
+
+  it("sizes the settings panel to the active page and caps tall pages", async () => {
+    const { wrapper } = mountToolbar({ sync: true })
+
+    await expandToolbar(wrapper)
+    await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
+
+    const [mainPage, copyPage, automationsPage] = wrapper.findAll(".settings-page")
+
+    Object.defineProperty(mainPage.element, "scrollHeight", {
+      configurable: true,
+      value: 240,
+    })
+    Object.defineProperty(copyPage.element, "scrollHeight", {
+      configurable: true,
+      value: 360,
+    })
+    Object.defineProperty(automationsPage.element, "scrollHeight", {
+      configurable: true,
+      value: 960,
+    })
+
+    window.dispatchEvent(new Event("resize"))
+    await nextTick()
+
+    expect(wrapper.find(".settings-pages").attributes("style")).toContain("height: 240px;")
+
+    const automationsButton = wrapper.findAll(".nav-btn").find(
+      (button) => button.text().includes("Manage MCP & Webhooks"),
+    )
+    expect(automationsButton).toBeDefined()
+    await automationsButton!.trigger("click")
+    await nextTick()
+
+    expect(wrapper.find(".settings-pages").attributes("style")).toContain("height: 520px;")
+  })
+
+  it("copies integration values from the MCP guide cards", async () => {
+    const clipboardWrite = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboardWrite },
+    })
+
+    const { wrapper } = mountToolbar({ sync: true })
+
+    await expandToolbar(wrapper)
+    await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
+    const automationsButton = wrapper.findAll(".nav-btn").find(
+      (button) => button.text().includes("Manage MCP & Webhooks"),
+    )
+    expect(automationsButton).toBeDefined()
+    await automationsButton!.trigger("click")
+    await wrapper.find('button[aria-label="Copy CLI server"]').trigger("click")
+    await nextTick()
+
+    expect(clipboardWrite).toHaveBeenCalledWith("npx agentation-vue-mcp server --port 4747 --mcp-port 4748")
+    expect(wrapper.find('button[aria-label="Copy CLI server"]').attributes("data-copied")).toBeDefined()
   })
 
   it("switches copy format in settings and updates the toolbar copy action", async () => {

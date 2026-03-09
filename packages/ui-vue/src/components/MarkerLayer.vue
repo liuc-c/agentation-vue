@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue"
-import type { AnnotationV2 } from "@liuovo/agentation-vue-core"
+import type { AnnotationStatus, AnnotationV2 } from "@liuovo/agentation-vue-core"
 import { findAnnotationTarget } from "../annotation-target.js"
 import { ANNOTATIONS_STORE_KEY, I18N_KEY, OVERLAY_KEY, SETTINGS_KEY } from "../injection-keys.js"
 import { injectStrict } from "../utils.js"
@@ -161,6 +161,36 @@ function truncate(text: string, max = 72): string {
   return text.length > max ? `${text.slice(0, max)}…` : text
 }
 
+function getStatus(annotation: AnnotationV2): AnnotationStatus {
+  return annotation.status ?? "pending"
+}
+
+function getStatusLabel(annotation: AnnotationV2): string {
+  switch (getStatus(annotation)) {
+    case "acknowledged":
+      return messages.value.workflow.statusAcknowledged
+    case "resolved":
+      return messages.value.workflow.statusResolved
+    case "dismissed":
+      return messages.value.workflow.statusDismissed
+    default:
+      return messages.value.workflow.statusPending
+  }
+}
+
+function getMarkerColor(annotation: AnnotationV2): string {
+  switch (getStatus(annotation)) {
+    case "acknowledged":
+      return "#0ea5e9"
+    case "resolved":
+      return "#22c55e"
+    case "dismissed":
+      return "#94a3b8"
+    default:
+      return annotationColor.value
+  }
+}
+
 function getBoundingBox(annotation: AnnotationV2): BoundingBox | undefined {
   return (annotation.metadata as { boundingBox?: BoundingBox } | undefined)?.boundingBox
 }
@@ -177,8 +207,8 @@ function getBoundingBox(annotation: AnnotationV2): BoundingBox | undefined {
       >
         <button
           class="marker-dot"
-          :class="{ hovered: hoveredId === marker.id }"
-          :style="{ backgroundColor: hoveredId === marker.id ? '#ff3b30' : annotationColor }"
+          :class="[{ hovered: hoveredId === marker.id }, `status-${getStatus(marker.annotation)}`]"
+          :style="{ backgroundColor: hoveredId === marker.id ? '#ff3b30' : getMarkerColor(marker.annotation) }"
           type="button"
           :aria-label="messages.marker.annotationAria(marker.number)"
           @click.stop="onMarkerClick(marker, $event)"
@@ -195,6 +225,14 @@ function getBoundingBox(annotation: AnnotationV2): BoundingBox | undefined {
             class="tooltip"
           >
             <div class="tooltip-element">{{ marker.annotation.elementSelector }}</div>
+            <div class="tooltip-meta">
+              <span class="tooltip-status" :data-status="getStatus(marker.annotation)">
+                {{ getStatusLabel(marker.annotation) }}
+              </span>
+              <span v-if="marker.annotation.thread?.length" class="tooltip-thread">
+                {{ messages.workflow.replyCount(marker.annotation.thread.length) }}
+              </span>
+            </div>
             <div class="tooltip-comment">{{ truncate(marker.annotation.comment) }}</div>
             <div class="tooltip-hint">{{ messages.marker.clickToEdit }}</div>
           </div>
@@ -322,6 +360,43 @@ function getBoundingBox(annotation: AnnotationV2): BoundingBox | undefined {
   overflow: hidden;
   text-overflow: ellipsis;
   padding-bottom: 2px;
+}
+
+.tooltip-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 10px;
+}
+
+.tooltip-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-weight: 600;
+  background: rgba(148, 163, 184, 0.18);
+  color: #cbd5e1;
+}
+
+.tooltip-status[data-status="pending"] {
+  background: rgba(59, 130, 246, 0.16);
+  color: #93c5fd;
+}
+
+.tooltip-status[data-status="acknowledged"] {
+  background: rgba(14, 165, 233, 0.16);
+  color: #67e8f9;
+}
+
+.tooltip-status[data-status="resolved"] {
+  background: rgba(34, 197, 94, 0.16);
+  color: #86efac;
+}
+
+.tooltip-thread {
+  color: rgba(255, 255, 255, 0.48);
 }
 
 .tooltip-hint {

@@ -130,6 +130,7 @@ export function runAgentationRuntime(options: ResolvedAgentationVueOptions): voi
   // 6. Expose runtime context for HMR disposal + console debugging
   window.__agentationRuntime = {
     dispose() {
+      bridge.sync?.dispose()
       app.unmount()
       listeners.dispose()
       areaSelection.clear()

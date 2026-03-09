@@ -14,7 +14,7 @@ import { createI18nState } from "../composables/useI18n.js"
 import type { OverlayState } from "../composables/useOverlay.js"
 import type { SelectionState } from "../composables/useSelection.js"
 
-function makeProvides(overrides?: { popoverVisible?: boolean }) {
+function makeProvides(overrides?: { popoverVisible?: boolean; editingAnnotation?: Record<string, unknown> | null }) {
   const store: AnnotationsStore = {
     annotations: [],
     enabled: true,
@@ -57,7 +57,7 @@ function makeProvides(overrides?: { popoverVisible?: boolean }) {
   const overlay: OverlayState = {
     popoverVisible: overrides?.popoverVisible ?? false,
     popoverPosition: overrides?.popoverVisible ? { top: 200, left: 300 } : null,
-    editingAnnotation: null,
+    editingAnnotation: overrides?.editingAnnotation as OverlayState["editingAnnotation"] ?? null,
     showPopover: vi.fn(),
     hidePopover: vi.fn(),
     showEditPopover: vi.fn(),
@@ -71,6 +71,8 @@ function makeProvides(overrides?: { popoverVisible?: boolean }) {
     annotationColor: "#3c82f7",
     showMarkers: true,
     copyFormat: "markdown" as const,
+    copyPrefix: "",
+    copyExcludeFields: [],
     autoClearAfterCopy: false,
     blockInteractions: true,
     locale: "en" as const,
@@ -163,5 +165,51 @@ describe("AnnotationPopover", () => {
     await nextTick()
 
     expect(wrapper.find(".styles-wrapper").classes()).toContain("expanded")
+  })
+
+  it("shows workflow status and recent thread replies for synced annotations", () => {
+    const { store, selection, overlay, settings, i18n } = makeProvides({
+      popoverVisible: true,
+      editingAnnotation: {
+        id: "a1",
+        schemaVersion: 1,
+        timestamp: new Date().toISOString(),
+        url: "http://localhost/",
+        elementSelector: "button.primary",
+        comment: "Original feedback",
+        source: {
+          framework: "vue",
+          componentName: "App",
+          file: "src/App.vue",
+          line: 10,
+          resolver: "test",
+        },
+        status: "resolved",
+        thread: [
+          {
+            id: "t1",
+            role: "agent",
+            content: "Updated the CTA padding and alignment.",
+            timestamp: "2026-03-09T01:02:03.000Z",
+          },
+        ],
+      },
+    })
+
+    const wrapper = mount(AnnotationPopover, {
+      global: {
+        provide: {
+          [ANNOTATIONS_STORE_KEY as symbol]: store,
+          [SELECTION_KEY as symbol]: selection,
+          [OVERLAY_KEY as symbol]: overlay,
+          [SETTINGS_KEY as symbol]: settings,
+          [I18N_KEY as symbol]: i18n,
+        },
+      },
+    })
+
+    expect(wrapper.find(".status-pill").text()).toContain("Resolved")
+    expect(wrapper.find(".thread-title").text()).toContain("Thread")
+    expect(wrapper.text()).toContain("Updated the CTA padding and alignment.")
   })
 })

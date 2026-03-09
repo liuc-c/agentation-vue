@@ -155,13 +155,22 @@ export default defineNuxtPlugin(() => {
 agentation({
   sync: {
     endpoint: "http://localhost:4747",
+    mcpEndpoint: "http://localhost:4748", // 可选，默认是 API 端口 + 1
+    projectId: "demo-app",                // 可选，显式项目作用域
     autoSync: true,
     debounceMs: 400,
+    ensureServer: true,
   },
 })
 ```
 
-在当前仓库里启动 MCP 服务：
+`sync` 在 `vite dev` 下默认开启。如果你不希望浏览器批注自动同步，显式设为
+`sync: false`。
+
+共享服务模式下，多个本地项目可以共用同一组 API 和 MCP 端口。Vite 插件会先做
+health check，端口已被占用时直接复用现有进程，不会重复拉起。
+
+在当前仓库里手动启动服务：
 
 ```bash
 pnpm mcp
@@ -170,8 +179,27 @@ pnpm mcp
 或者直接使用 MCP 包：
 
 ```bash
-npx agentation-vue-mcp server
+npx agentation-vue-mcp server --port 4747 --mcp-port 4748
 ```
+
+默认情况下，浏览器同步 API 监听 `4747`，MCP 客户端通过 `4748` 连接，
+可使用 streamable HTTP（`/mcp`）、兼容 SSE（`/sse`）或 stdio。
+
+### 产品内快速开始
+
+Toolbar 里的 `快速开始` 面板会直接展示当前运行时配置，包括：
+
+- 浏览器同步 API 与 MCP transport 地址
+- `agentation-vue-mcp server` 的 CLI 启动命令
+- Claude CLI 的注册命令
+- 服务端读取的 Webhook 环境变量
+
+推荐本地接法：
+
+1. 多个 Vite 项目优先共用一套 Agentation 服务。
+2. 只有需要更强隔离时，再显式配置不同端口或 `projectId`。
+3. 多项目共用时，agent 读取批注请带 `projectFilter`。
+4. 如果还要接外部自动化，可以再启用 webhook 转发。
 
 ## 插件配置项
 
@@ -181,7 +209,7 @@ npx agentation-vue-mcp server
 | `locale` | `"en" \| "zh-CN"` | `"en"` | 默认界面语言。 |
 | `storagePrefix` | `string` | `"agentation-vue-"` | 本地存储 key 前缀。 |
 | `outputDetail` | `"compact" \| "standard" \| "detailed" \| "forensic"` | `"standard"` | 控制导出内容包含多少元数据。 |
-| `sync` | `{ endpoint: string, autoSync?: boolean, debounceMs?: number } \| false` | `false` | 把批注同步到 MCP/HTTP 服务端。 |
+| `sync` | `{ endpoint?: string, mcpEndpoint?: string, projectId?: string, autoSync?: boolean, debounceMs?: number, ensureServer?: boolean } \| false` | `serve` 下默认开启 | 把批注同步到共享 Agentation V2 API 与 MCP workflow 服务。 |
 | `inspector` | `"tracer"` | `"tracer"` | 源码定位策略，目前保留 `tracer`。 |
 
 ## 导出详情等级

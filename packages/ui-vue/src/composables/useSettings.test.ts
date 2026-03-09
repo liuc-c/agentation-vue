@@ -15,6 +15,8 @@ describe("createSettingsState", () => {
     expect(state.annotationColor).toBe("#3c82f7")
     expect(state.showMarkers).toBe(true)
     expect(state.copyFormat).toBe("markdown")
+    expect(state.copyPrefix).toBe("")
+    expect(state.copyExcludeFields).toEqual([])
     expect(state.autoClearAfterCopy).toBe(false)
     expect(state.blockInteractions).toBe(true)
     expect(state.locale).toBe("en")
@@ -25,12 +27,16 @@ describe("createSettingsState", () => {
       outputDetail: "forensic",
       darkMode: false,
       copyFormat: "json",
+      copyPrefix: "你好，帮我修改以下",
+      copyExcludeFields: ["projectArea", "framework"],
       blockInteractions: false,
       locale: "zh-CN",
     })
     expect(state.outputDetail).toBe("forensic")
     expect(state.darkMode).toBe(false)
     expect(state.copyFormat).toBe("json")
+    expect(state.copyPrefix).toBe("你好，帮我修改以下")
+    expect(state.copyExcludeFields).toEqual(["projectArea", "framework"])
     expect(state.blockInteractions).toBe(false)
     expect(state.locale).toBe("zh-CN")
   })
@@ -53,12 +59,21 @@ describe("createSettingsState", () => {
   it("loads from localStorage when available", () => {
     localStorage.setItem(
       "agentation-vue-settings",
-      JSON.stringify({ darkMode: false, outputDetail: "detailed", copyFormat: "json", locale: "zh-CN" }),
+      JSON.stringify({
+        darkMode: false,
+        outputDetail: "detailed",
+        copyFormat: "json",
+        copyPrefix: "Hi",
+        copyExcludeFields: ["projectArea"],
+        locale: "zh-CN",
+      }),
     )
     const state = createSettingsState()
     expect(state.darkMode).toBe(false)
     expect(state.outputDetail).toBe("detailed")
     expect(state.copyFormat).toBe("json")
+    expect(state.copyPrefix).toBe("Hi")
+    expect(state.copyExcludeFields).toEqual(["projectArea"])
     expect(state.locale).toBe("zh-CN")
   })
 
@@ -78,5 +93,15 @@ describe("createSettingsState", () => {
     )
     const state = createSettingsState()
     expect(state.locale).toBe("en")
+  })
+
+  it("drops invalid copy exclude fields from storage", () => {
+    localStorage.setItem(
+      "agentation-vue-settings",
+      JSON.stringify({ copyExcludeFields: ["projectArea", "unknown"] }),
+    )
+
+    const state = createSettingsState()
+    expect(state.copyExcludeFields).toEqual(["projectArea"])
   })
 })

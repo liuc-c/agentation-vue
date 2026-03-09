@@ -11,6 +11,21 @@ export interface UiNotification {
   duration?: number
 }
 
+export interface RuntimeSyncInfo {
+  endpoint: string
+  mcpEndpoint?: string
+  projectId?: string
+  mcpHttpUrl?: string
+  mcpSseUrl?: string
+}
+
+export interface RuntimeSyncEvent {
+  type: "reconciled" | "error"
+  source: "init" | "flush" | "remote"
+  annotationCount?: number
+  message?: string
+}
+
 // ---------------------------------------------------------------------------
 // Runtime bridge — structural contract consumed by ui-vue
 // ---------------------------------------------------------------------------
@@ -29,6 +44,8 @@ export interface RuntimeStorageBridge {
  * Handles debounced annotation syncing to the MCP server.
  */
 export interface RuntimeSyncBridge {
+  /** Connection info surfaced to the product UI. */
+  readonly info: RuntimeSyncInfo
   /** Perform initial sync (flush any unsynced annotations). */
   init(): Promise<void>
   /** Enqueue an annotation for upsert to the server. */
@@ -37,6 +54,10 @@ export interface RuntimeSyncBridge {
   enqueueUpdate(annotation: AnnotationV2): void
   /** Enqueue a delete for the given annotation. */
   enqueueDelete(annotation: AnnotationV2): void
+  /** Subscribe to sync lifecycle events. */
+  subscribe(listener: (event: RuntimeSyncEvent) => void): () => void
+  /** Dispose network listeners and timers. */
+  dispose(): void
 }
 
 export interface RuntimeBridge {

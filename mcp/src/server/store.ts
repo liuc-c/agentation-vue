@@ -266,51 +266,123 @@ function createMemoryStore(): AFSStore {
 
     // -- Annotations V2 (Vue schema) ------------------------------------------
 
-    addAnnotationV2(sessionId: string, data: AnnotationV2): AnnotationV2 | undefined {
-      const session = sessions.get(sessionId);
-      if (!session) return undefined;
+	    addAnnotationV2(sessionId: string, data: AnnotationV2): AnnotationV2 | undefined {
+	      const session = sessions.get(sessionId);
+	      if (!session) return undefined;
 
       // Idempotent: return existing if same ID
       const existing = annotationsV2.get(data.id);
       if (existing) return existing;
 
-      const annotation: AnnotationV2 = {
-        ...data,
-        sessionId,
-        createdAt: new Date().toISOString(),
-      };
+	      const annotation: AnnotationV2 = {
+	        ...data,
+	        sessionId,
+	        status: data.status ?? "pending",
+	        createdAt: new Date().toISOString(),
+	      };
 
-      annotationsV2.set(annotation.id, annotation);
-      return annotation;
-    },
+	      annotationsV2.set(annotation.id, annotation);
+	      const event = eventBus.emit("annotation.created", sessionId, annotation);
+	      events.push(event);
+	      return annotation;
+	    },
 
     getAnnotationV2(id: string): AnnotationV2 | undefined {
       return annotationsV2.get(id);
     },
 
-    updateAnnotationV2(
-      id: string,
-      data: Partial<Omit<AnnotationV2, "id" | "sessionId" | "createdAt">>
-    ): AnnotationV2 | undefined {
-      const annotation = annotationsV2.get(id);
-      if (!annotation) return undefined;
+	    updateAnnotationV2(
+	      id: string,
+	      data: Partial<Omit<AnnotationV2, "id" | "sessionId" | "createdAt">>
+	    ): AnnotationV2 | undefined {
+	      const annotation = annotationsV2.get(id);
+	      if (!annotation) return undefined;
 
-      Object.assign(annotation, data, { updatedAt: new Date().toISOString() });
-      return annotation;
-    },
+	      Object.assign(annotation, data, { updatedAt: new Date().toISOString() });
+	      if (annotation.sessionId) {
+	        const event = eventBus.emit("annotation.updated", annotation.sessionId, annotation);
+	        events.push(event);
+	      }
+	      return annotation;
+	    },
 
-    getSessionAnnotationsV2(sessionId: string): AnnotationV2[] {
-      return Array.from(annotationsV2.values()).filter(
-        (a) => a.sessionId === sessionId
+	    updateAnnotationV2Status(
+	      id: string,
+	      status: AnnotationStatus,
+	      resolvedBy?: "human" | "agent",
+	    ): AnnotationV2 | undefined {
+	      const annotation = annotationsV2.get(id);
+	      if (!annotation) return undefined;
+
+	      annotation.status = status;
+	      annotation.updatedAt = new Date().toISOString();
+
+	      if (status === "resolved" || status === "dismissed") {
+	        annotation.resolvedAt = new Date().toISOString();
+	        annotation.resolvedBy = resolvedBy || "agent";
+	      } else {
+	        delete annotation.resolvedAt;
+	        delete annotation.resolvedBy;
+	      }
+
+	      if (annotation.sessionId) {
+	        const event = eventBus.emit("annotation.updated", annotation.sessionId, annotation);
+	        events.push(event);
+	      }
+
+	      return annotation;
+	    },
+
+	    addThreadMessageV2(
+	      annotationId: string,
+	      role: "human" | "agent",
+	      content: string,
+	    ): AnnotationV2 | undefined {
+	      const annotation = annotationsV2.get(annotationId);
+	      if (!annotation) return undefined;
+
+	      const message: ThreadMessage = {
+	        id: generateId(),
+	        role,
+	        content,
+	        timestamp: new Date().toISOString(),
+	      };
+
+	      annotation.thread = [...(annotation.thread || []), message];
+	      annotation.updatedAt = new Date().toISOString();
+
+	      if (annotation.sessionId) {
+	        const updatedEvent = eventBus.emit("annotation.updated", annotation.sessionId, annotation);
+	        events.push(updatedEvent);
+	        const threadEvent = eventBus.emit("thread.message", annotation.sessionId, message);
+	        events.push(threadEvent);
+	      }
+
+	      return annotation;
+	    },
+
+	    getPendingAnnotationsV2(sessionId: string): AnnotationV2[] {
+	      return Array.from(annotationsV2.values()).filter(
+	        (a) => a.sessionId === sessionId && (a.status ?? "pending") === "pending",
+	      );
+	    },
+
+	    getSessionAnnotationsV2(sessionId: string): AnnotationV2[] {
+	      return Array.from(annotationsV2.values()).filter(
+	        (a) => a.sessionId === sessionId
       );
     },
 
-    deleteAnnotationV2(id: string): AnnotationV2 | undefined {
-      const annotation = annotationsV2.get(id);
-      if (!annotation) return undefined;
-      annotationsV2.delete(id);
-      return annotation;
-    },
+	    deleteAnnotationV2(id: string): AnnotationV2 | undefined {
+	      const annotation = annotationsV2.get(id);
+	      if (!annotation) return undefined;
+	      annotationsV2.delete(id);
+	      if (annotation.sessionId) {
+	        const event = eventBus.emit("annotation.deleted", annotation.sessionId, annotation);
+	        events.push(event);
+	      }
+	      return annotation;
+	    },
 
     getEventsSince(sessionId: string, sequence: number): AFSEvent[] {
       return events.filter(
@@ -423,6 +495,26 @@ export function updateAnnotationV2(
   data: Partial<Omit<AnnotationV2, "id" | "sessionId" | "createdAt">>
 ): AnnotationV2 | undefined {
   return getStore().updateAnnotationV2(id, data);
+}
+
+export function updateAnnotationV2Status(
+  id: string,
+  status: AnnotationStatus,
+  resolvedBy?: "human" | "agent",
+): AnnotationV2 | undefined {
+  return getStore().updateAnnotationV2Status(id, status, resolvedBy);
+}
+
+export function addThreadMessageV2(
+  annotationId: string,
+  role: "human" | "agent",
+  content: string,
+): AnnotationV2 | undefined {
+  return getStore().addThreadMessageV2(annotationId, role, content);
+}
+
+export function getPendingAnnotationsV2(sessionId: string): AnnotationV2[] {
+  return getStore().getPendingAnnotationsV2(sessionId);
 }
 
 export function getSessionAnnotationsV2(sessionId: string): AnnotationV2[] {

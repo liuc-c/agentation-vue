@@ -90,6 +90,13 @@ export type AnnotationV2 = {
   comment: string;
   source: SourceLocation;
   metadata?: Record<string, unknown>;
+  intent?: AnnotationIntent;
+  severity?: AnnotationSeverity;
+  status?: AnnotationStatus;
+  thread?: ThreadMessage[];
+  resolvedAt?: string;
+  resolvedBy?: "human" | "agent";
+  authorId?: string;
 
   // Protocol fields (added server-side)
   sessionId?: string;
@@ -109,7 +116,7 @@ export type ThreadMessage = {
   id: string;
   role: "human" | "agent";
   content: string;
-  timestamp: number;
+  timestamp: string | number;
 };
 
 // -----------------------------------------------------------------------------
@@ -138,7 +145,7 @@ export type AFSEvent = {
   timestamp: string; // ISO 8601
   sessionId: string;
   sequence: number; // Monotonic for ordering/dedup/replay
-  payload: Annotation | Session | ThreadMessage | ActionRequest;
+  payload: Annotation | AnnotationV2 | Session | ThreadMessage | ActionRequest;
 };
 
 // -----------------------------------------------------------------------------
@@ -229,6 +236,17 @@ export interface AFSStore {
     id: string,
     data: Partial<Omit<AnnotationV2, "id" | "sessionId" | "createdAt">>
   ): AnnotationV2 | undefined;
+  updateAnnotationV2Status(
+    id: string,
+    status: AnnotationStatus,
+    resolvedBy?: "human" | "agent"
+  ): AnnotationV2 | undefined;
+  addThreadMessageV2(
+    annotationId: string,
+    role: "human" | "agent",
+    content: string
+  ): AnnotationV2 | undefined;
+  getPendingAnnotationsV2(sessionId: string): AnnotationV2[];
   getSessionAnnotationsV2(sessionId: string): AnnotationV2[];
   deleteAnnotationV2(id: string): AnnotationV2 | undefined;
 

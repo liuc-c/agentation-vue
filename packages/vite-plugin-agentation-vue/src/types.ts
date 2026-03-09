@@ -12,12 +12,29 @@ import type { Locale } from "@liuovo/agentation-vue-ui"
 // ---------------------------------------------------------------------------
 
 export interface AgentationVueSyncOptions {
-  /** Sync endpoint URL (e.g. "http://localhost:4747") */
+  /** Sync endpoint URL (default: "http://localhost:4747") */
   endpoint: string
+  /** Optional MCP transport endpoint. When omitted, defaults to endpoint port + 1. */
+  mcpEndpoint?: string
+  /** Optional stable project identifier for multi-project shared servers. */
+  projectId?: string
   /** Whether to automatically sync annotations (default: true) */
   autoSync?: boolean
   /** Debounce window in ms for batching syncs (default: 400) */
   debounceMs?: number
+  /**
+   * Ensure the shared Agentation server is running during `vite dev`.
+   * When multiple projects point to the same ports, the plugin health-checks
+   * first and reuses the existing process instead of starting a duplicate.
+   */
+  ensureServer?: boolean
+}
+
+export const DEFAULT_AGENTATION_SYNC_OPTIONS: Readonly<Required<Omit<AgentationVueSyncOptions, "mcpEndpoint" | "projectId">>> = {
+  endpoint: "http://localhost:4747",
+  autoSync: true,
+  debounceMs: 400,
+  ensureServer: true,
 }
 
 export interface AgentationVueOptions {
@@ -29,7 +46,7 @@ export interface AgentationVueOptions {
   outputDetail?: OutputDetailLevel
   /** Default UI locale (default: "en") */
   locale?: Locale
-  /** Sync endpoint configuration — no-op placeholder until Phase 5 */
+  /** Sync endpoint configuration for shared Agentation API/MCP workflow. Defaults on unless set to false. */
   sync?: AgentationVueSyncOptions | false
   /** Inspector strategy (default: "tracer") — reserved for future alternatives */
   inspector?: "tracer"
@@ -55,13 +72,41 @@ export function resolveOptions(
   raw: AgentationVueOptions = {},
   command: "serve" | "build" = "serve",
 ): ResolvedAgentationVueOptions {
+  const resolvedSync = raw.sync === false
+    ? false
+    : {
+        ...DEFAULT_AGENTATION_SYNC_OPTIONS,
+        ...raw.sync,
+      }
+
   return {
     enabled: raw.enabled ?? (command === "serve"),
     storagePrefix: raw.storagePrefix ?? DEFAULT_STORAGE_PREFIX,
     outputDetail: raw.outputDetail ?? "standard",
     locale: raw.locale ?? "en",
-    sync: raw.sync ?? false,
+    sync: resolvedSync,
     inspector: raw.inspector ?? "tracer",
+  }
+}
+
+export function resolveMcpEndpoint(sync: AgentationVueSyncOptions): string | undefined {
+  if (sync.mcpEndpoint) {
+    return sync.mcpEndpoint.replace(/\/+$/, "")
+  }
+
+  try {
+    const apiUrl = new URL(sync.endpoint)
+    const protocolDefaultPort = apiUrl.protocol === "https:" ? 443 : 80
+    const apiPort = parseInt(apiUrl.port || String(protocolDefaultPort), 10)
+    if (!Number.isFinite(apiPort)) {
+      return undefined
+    }
+
+    const nextPort = apiPort + 1
+    apiUrl.port = String(nextPort)
+    return apiUrl.toString().replace(/\/+$/, "")
+  } catch {
+    return undefined
   }
 }
 

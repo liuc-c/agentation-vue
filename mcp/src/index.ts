@@ -6,7 +6,7 @@
  */
 
 // Re-export server functions
-export { startHttpServer, startMcpServer } from "./server/index.js";
+export { startHttpServer, startMcpHttpServer, startMcpServer } from "./server/index.js";
 
 // Re-export store functions
 export {

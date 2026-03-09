@@ -1,4 +1,5 @@
 import { ref } from "vue"
+import { formatToJSON, formatToMarkdown, type ExportPageContext } from "@liuovo/agentation-vue-core"
 import { originalSetTimeout } from "./useFreezeState.js"
 import type { AnnotationsStore } from "./useAnnotationsStore.js"
 import type { SettingsState } from "./useSettings.js"
@@ -24,7 +25,7 @@ export interface ExportActions {
  */
 export function createExportActions(
   store: AnnotationsStore,
-  _settings: SettingsState,
+  settings: SettingsState,
 ): ExportActions {
   const copyFeedback = ref<ExportFormat | null>(null)
 
@@ -56,13 +57,40 @@ export function createExportActions(
   }
 
   async function exportJSON(): Promise<void> {
-    const payload = JSON.stringify(store.exportJSON(), null, 2)
+    const payload = buildClipboardPayload("json")
     if (await writeClipboard(payload)) flash("json")
   }
 
   async function exportMarkdown(): Promise<void> {
-    const payload = store.exportMarkdown()
+    const payload = buildClipboardPayload("markdown")
     if (await writeClipboard(payload)) flash("markdown")
+  }
+
+  function buildClipboardPayload(format: ExportFormat): string {
+    const page = getPageContext()
+
+    const payload = format === "json"
+      ? JSON.stringify(formatToJSON([...store.annotations], {
+        detailLevel: settings.outputDetail,
+        page,
+        excludeFields: settings.copyExcludeFields,
+      }), null, 2)
+      : formatToMarkdown([...store.annotations], {
+        detailLevel: settings.outputDetail,
+        page,
+        excludeFields: settings.copyExcludeFields,
+      })
+
+    return prependCopyPrefix(payload)
+  }
+
+  function getPageContext(): ExportPageContext {
+    return store.exportJSON().page
+  }
+
+  function prependCopyPrefix(payload: string): string {
+    const prefix = settings.copyPrefix.replace(/\r\n/g, "\n").trim()
+    return prefix ? `${prefix}\n${payload}` : payload
   }
 
   return {

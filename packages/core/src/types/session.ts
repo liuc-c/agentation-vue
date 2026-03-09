@@ -1,4 +1,4 @@
-import type { AnnotationV2 } from "./annotation.js"
+import type { AnnotationThreadMessage, AnnotationV2 } from "./annotation.js"
 
 export type SessionStatus = "active" | "approved" | "closed"
 
@@ -16,9 +16,4 @@ export interface SessionWithAnnotations extends Session {
   annotations: AnnotationV2[]
 }
 
-export interface ThreadMessage {
-  id: string
-  role: "human" | "agent"
-  content: string
-  timestamp: string
-}
+export type ThreadMessage = AnnotationThreadMessage

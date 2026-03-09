@@ -1,64 +1,150 @@
 import {
   createSession as apiCreateSession,
-  syncAnnotation,
-  updateAnnotation as apiUpdateAnnotation,
   deleteAnnotation as apiDeleteAnnotation,
-} from "@liuovo/agentation-vue-core"
-import {
+  getSession as apiGetSession,
+  markAnnotationsSynced,
   getUnsyncedAnnotations,
   loadSessionId,
-  markAnnotationsSynced,
+  resolveV2Endpoint,
+  saveAnnotations,
   saveSessionId,
+  syncAnnotation,
+  updateAnnotation as apiUpdateAnnotation,
 } from "@liuovo/agentation-vue-core"
 import type { AnnotationV2 } from "@liuovo/agentation-vue-core"
-import type { RuntimeSyncBridge } from "@liuovo/agentation-vue-ui"
-import type { AgentationStorageBridge, AgentationVueSyncOptions } from "../types.js"
+import type {
+  RuntimeSyncBridge,
+  RuntimeSyncEvent,
+  RuntimeSyncInfo,
+} from "@liuovo/agentation-vue-ui"
+import type {
+  AgentationStorageBridge,
+  AgentationVueSyncOptions,
+} from "../types.js"
+import { resolveMcpEndpoint } from "../types.js"
 
-/**
- * Creates a sync bridge that connects the local annotation store
- * to the remote MCP server via the V2 HTTP API.
- *
- * - On init, flushes any unsynced annotations to the server.
- * - On enqueueUpsert, debounces a flush to batch rapid saves.
- * - On enqueueDelete, immediately fires a best-effort DELETE.
- */
+type StoredAnnotation = AnnotationV2 & { _syncedTo?: string }
+
 export function createRuntimeSyncBridge(
   sync: AgentationVueSyncOptions,
   storage: AgentationStorageBridge,
 ): RuntimeSyncBridge {
   const pathname = () => window.location.pathname
   const debounceMs = sync.debounceMs ?? 400
+  const listeners = new Set<(event: RuntimeSyncEvent) => void>()
+  const mcpEndpoint = resolveMcpEndpoint(sync)
+  const info: RuntimeSyncInfo = {
+    endpoint: sync.endpoint.replace(/\/+$/, ""),
+    mcpEndpoint,
+    projectId: sync.projectId,
+    mcpHttpUrl: mcpEndpoint ? `${mcpEndpoint}/mcp` : undefined,
+    mcpSseUrl: mcpEndpoint ? `${mcpEndpoint}/sse` : undefined,
+  }
 
   let sessionId: string | undefined = loadSessionId(pathname(), storage.options) ?? undefined
   let currentPathname = pathname()
   let flushTimer: ReturnType<typeof setTimeout> | undefined
   let flushInFlight: Promise<void> | null = null
   let dirtyWhileFlushing = false
+  let eventSource: EventSource | null = null
+  let pathWatchTimer: ReturnType<typeof setInterval> | undefined
 
-  /**
-   * Re-resolve sessionId when the SPA pathname changes.
-   * Called before flush operations to handle client-side routing.
-   */
-  function watchPathname(): void {
-    const current = pathname()
-    if (current !== currentPathname) {
-      currentPathname = current
-      sessionId = loadSessionId(current, storage.options) ?? undefined
+  function emit(event: RuntimeSyncEvent): void {
+    for (const listener of listeners) {
+      listener(event)
     }
   }
 
-  /**
-   * Ensure a server-side session exists for the current page.
-   * Creates one lazily and persists the ID in localStorage.
-   */
+  function stopEventSource(): void {
+    eventSource?.close()
+    eventSource = null
+  }
+
+  async function reconcileFromServer(
+    sid: string,
+    source: RuntimeSyncEvent["source"],
+  ): Promise<void> {
+    try {
+      const session = await apiGetSession(sync.endpoint, sid)
+      const path = currentPathname
+      const unsynced = getUnsyncedAnnotations(path, sid, storage.options) as StoredAnnotation[]
+      const merged = new Map<string, StoredAnnotation>()
+
+      for (const annotation of session.annotations) {
+        merged.set(annotation.id, {
+          ...annotation,
+          _syncedTo: sid,
+        })
+      }
+
+      for (const annotation of unsynced) {
+        if (!merged.has(annotation.id)) {
+          merged.set(annotation.id, annotation)
+        }
+      }
+
+      saveAnnotations(path, [...merged.values()], storage.options)
+      emit({
+        type: "reconciled",
+        source,
+        annotationCount: session.annotations.length,
+      })
+    } catch (err) {
+      emit({
+        type: "error",
+        source,
+        message: err instanceof Error ? err.message : "Unknown sync reconciliation error",
+      })
+    }
+  }
+
+  function ensureEventSource(sid: string): void {
+    if (eventSource) return
+
+    const url = `${resolveV2Endpoint(sync.endpoint)}/sessions/${sid}/events`
+    const source = new EventSource(url)
+    const onRemoteMutation = () => {
+      void reconcileFromServer(sid, "remote")
+    }
+
+    source.addEventListener("annotation.created", onRemoteMutation)
+    source.addEventListener("annotation.updated", onRemoteMutation)
+    source.addEventListener("annotation.deleted", onRemoteMutation)
+    source.onerror = () => {
+      if (source.readyState === EventSource.CLOSED && eventSource === source) {
+        eventSource = null
+      }
+    }
+
+    eventSource = source
+  }
+
+  function handlePathChange(): void {
+    const current = pathname()
+    if (current === currentPathname) return
+
+    currentPathname = current
+    stopEventSource()
+    sessionId = loadSessionId(current, storage.options) ?? undefined
+
+    if (sessionId) {
+      ensureEventSource(sessionId)
+      void reconcileFromServer(sessionId, "remote")
+    }
+  }
+
   async function ensureSession(): Promise<string> {
-    watchPathname()
-    if (sessionId) return sessionId
+    handlePathChange()
+    if (sessionId) {
+      ensureEventSource(sessionId)
+      return sessionId
+    }
 
     try {
-      const session = await apiCreateSession(sync.endpoint, window.location.href)
+      const session = await apiCreateSession(sync.endpoint, window.location.href, sync.projectId)
       sessionId = session.id
       saveSessionId(pathname(), session.id, storage.options)
+      ensureEventSource(session.id)
       return session.id
     } catch (err) {
       console.warn("[agentation] Failed to create session:", err)
@@ -66,12 +152,6 @@ export function createRuntimeSyncBridge(
     }
   }
 
-  /**
-   * Flush all unsynced annotations to the server.
-   *
-   * Serialized: if a flush is already running and new writes arrive,
-   * we mark the state as dirty and re-flush after the current one completes.
-   */
   async function flush(): Promise<void> {
     if (flushInFlight) {
       dirtyWhileFlushing = true
@@ -82,29 +162,37 @@ export function createRuntimeSyncBridge(
       const sid = await ensureSession()
       const pending = getUnsyncedAnnotations(pathname(), sid, storage.options)
 
-      if (pending.length === 0) return
+      if (pending.length === 0) {
+        await reconcileFromServer(sid, "init")
+        return
+      }
 
-      const synced: string[] = []
+      const syncedIds: string[] = []
       for (const annotation of pending) {
         try {
           await syncAnnotation(sync.endpoint, sid, annotation)
-          synced.push(annotation.id)
+          syncedIds.push(annotation.id)
         } catch (err) {
           console.warn("[agentation] Failed to sync annotation:", annotation.id, err)
         }
       }
 
-      if (synced.length > 0) {
-        markAnnotationsSynced(pathname(), synced, sid, storage.options)
+      if (syncedIds.length > 0) {
+        markAnnotationsSynced(pathname(), syncedIds, sid, storage.options)
       }
+
+      await reconcileFromServer(sid, pending.length > 0 ? "flush" : "init")
     })()
       .catch((err) => {
         console.warn("[agentation] Sync flush failed:", err)
+        emit({
+          type: "error",
+          source: "flush",
+          message: err instanceof Error ? err.message : "Unknown sync flush error",
+        })
       })
       .finally(() => {
         flushInFlight = null
-
-        // If new writes arrived while we were flushing, schedule a follow-up
         if (dirtyWhileFlushing) {
           dirtyWhileFlushing = false
           scheduleFlush()
@@ -114,10 +202,6 @@ export function createRuntimeSyncBridge(
     return flushInFlight
   }
 
-  /**
-   * Schedule a debounced flush.
-   * Resets the timer on each call to batch rapid saves.
-   */
   function scheduleFlush(): void {
     if (flushTimer != null) {
       clearTimeout(flushTimer)
@@ -128,14 +212,9 @@ export function createRuntimeSyncBridge(
     }, debounceMs)
   }
 
-  /**
-   * Best-effort PATCH for an updated annotation.
-   * Reuses the same session; falls back to upsert on error.
-   */
   async function updateRemote(annotation: AnnotationV2): Promise<void> {
-    watchPathname()
+    handlePathChange()
     if (!sessionId) {
-      // No session yet — treat as upsert
       scheduleFlush()
       return
     }
@@ -148,16 +227,8 @@ export function createRuntimeSyncBridge(
     }
   }
 
-  /**
-   * Best-effort DELETE for a removed annotation.
-   * If the annotation was never synced (404), silently ignore.
-   * Does NOT create a session — if no session exists, the annotation
-   * was never synced anyway.
-   */
   async function deleteRemote(annotation: AnnotationV2): Promise<void> {
-    watchPathname()
-    // Don't create a session just to delete — if no session exists,
-    // the annotation was never synced.
+    handlePathChange()
     if (!sessionId) return
 
     try {
@@ -169,8 +240,12 @@ export function createRuntimeSyncBridge(
   }
 
   return {
+    info,
+
     init() {
       if (sync.autoSync === false) return Promise.resolve()
+
+      pathWatchTimer = pathWatchTimer ?? setInterval(handlePathChange, 500)
       return flush()
     },
 
@@ -187,6 +262,26 @@ export function createRuntimeSyncBridge(
     enqueueDelete(annotation: AnnotationV2) {
       if (sync.autoSync === false) return
       void deleteRemote(annotation)
+    },
+
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+
+    dispose() {
+      stopEventSource()
+      if (flushTimer != null) {
+        clearTimeout(flushTimer)
+        flushTimer = undefined
+      }
+      if (pathWatchTimer != null) {
+        clearInterval(pathWatchTimer)
+        pathWatchTimer = undefined
+      }
+      listeners.clear()
     },
   }
 }

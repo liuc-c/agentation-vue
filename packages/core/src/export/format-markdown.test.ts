@@ -53,11 +53,15 @@ describe("formatToMarkdown", () => {
       metadata: {
         cssClasses: "btn primary",
         boundingBox: { x: 100, y: 200, width: 80, height: 40 },
+        project_area: "/checkout :: CheckoutPage > PaymentForm :: main",
+        context_hints: ["heading: Billing", "ariaLabel: Confirm payment"],
       },
     })
     const md = formatToMarkdown([a], { detailLevel: "detailed" })
+    expect(md).toContain("**Project area:** /checkout :: CheckoutPage > PaymentForm :: main")
     expect(md).toContain("**Component hierarchy:** App > Layout > Button")
     expect(md).toContain("**Classes:** btn primary")
+    expect(md).toContain("**Context hints:** heading: Billing | ariaLabel: Confirm payment")
     expect(md).toContain("**Position:**")
   })
 
@@ -87,5 +91,55 @@ describe("formatToMarkdown", () => {
       page: { pathname: "/about" },
     })
     expect(md).toContain("## Page Feedback: /about")
+  })
+
+  it("excludes configured fields from markdown output", () => {
+    const md = formatToMarkdown([makeAnnotation({
+      elementText: "Click me",
+      source: {
+        framework: "vue",
+        componentName: "App",
+        componentHierarchy: "App > Hero > CTA",
+        file: "src/App.vue",
+        line: 10,
+        column: 2,
+        resolver: "vue-tracer",
+      },
+      metadata: {
+        project_area: "/home :: Hero",
+        context_hints: ["heading: Hero"],
+        elementPath: "main > button",
+        fullPath: "html > body > main > button",
+        cssClasses: "btn primary",
+        boundingBox: { x: 10, y: 20, width: 30, height: 40 },
+        nearbyText: "Primary CTA",
+        computedStyles: "color: red",
+        accessibility: "button",
+        nearbyElements: "a.link",
+      },
+    })], {
+      detailLevel: "forensic",
+      page: {
+        pathname: "/home",
+        viewport: { width: 1440, height: 900 },
+        url: "http://localhost/home",
+        userAgent: "Vitest",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        devicePixelRatio: 2,
+      },
+      excludeFields: ["projectArea", "contextHints", "sourceLocation", "framework", "selectedText", "context", "url", "timestamp", "viewport"],
+    })
+
+    expect(md).not.toContain("Project area")
+    expect(md).not.toContain("Context hints")
+    expect(md).not.toContain("**Source:**")
+    expect(md).not.toContain("**Framework:**")
+    expect(md).not.toContain("Selected text")
+    expect(md).not.toContain("**Context:**")
+    expect(md).not.toContain("- URL:")
+    expect(md).not.toContain("- Timestamp:")
+    expect(md).not.toContain("- Viewport:")
+    expect(md).toContain("Component hierarchy")
+    expect(md).toContain("Computed Styles")
   })
 })

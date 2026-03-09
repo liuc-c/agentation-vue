@@ -1,10 +1,12 @@
 import type { AnnotationV2, OutputDetailLevel } from "../types/index.js"
+import type { ExportExcludeField } from "./exclude-fields.js"
 import type { ExportPageContext } from "./format-markdown.js"
 
 export interface JsonFormatOptions {
   detailLevel?: OutputDetailLevel
   page?: ExportPageContext
   schemaVersion?: number
+  excludeFields?: readonly ExportExcludeField[]
 }
 
 export interface AnnotationExportDocument {
@@ -23,6 +25,19 @@ export interface AnnotationExportDocument {
   annotations: Array<Record<string, unknown>>
 }
 
+type JsonAnnotationMetadata = Record<string, unknown> & {
+  project_area?: unknown
+  context_hints?: unknown
+  elementPath?: unknown
+  fullPath?: unknown
+  cssClasses?: unknown
+  boundingBox?: unknown
+  nearbyText?: unknown
+  nearbyElements?: unknown
+  computedStyles?: unknown
+  accessibility?: unknown
+}
+
 function pruneUndefined<T extends Record<string, unknown>>(obj: T): T {
   return Object.fromEntries(
     Object.entries(obj).filter(([, v]) => v !== undefined),
@@ -32,29 +47,60 @@ function pruneUndefined<T extends Record<string, unknown>>(obj: T): T {
 function formatAnnotation(
   a: AnnotationV2,
   detailLevel: OutputDetailLevel,
+  excluded: ReadonlySet<ExportExcludeField>,
 ): Record<string, unknown> {
   if (detailLevel === "compact") {
     return pruneUndefined({
       elementSelector: a.elementSelector,
       comment: a.comment,
-      elementText: a.elementText,
+      elementText: excluded.has("selectedText") ? undefined : a.elementText,
     })
   }
 
   const result: Record<string, unknown> = pruneUndefined({
     id: a.id,
     schemaVersion: a.schemaVersion,
-    timestamp: a.timestamp,
-    url: a.url,
+    timestamp: excluded.has("timestamp") ? undefined : a.timestamp,
+    url: excluded.has("url") ? undefined : a.url,
     elementSelector: a.elementSelector,
-    elementText: a.elementText,
+    elementText: excluded.has("selectedText") ? undefined : a.elementText,
     comment: a.comment,
-    source: pruneUndefined({ ...a.source }),
   })
+
+  const source = pruneUndefined({
+    framework: excluded.has("framework") ? undefined : a.source.framework,
+    componentName: excluded.has("component") ? undefined : a.source.componentName,
+    componentHierarchy: excluded.has("componentHierarchy") ? undefined : a.source.componentHierarchy,
+    file: excluded.has("sourceLocation") ? undefined : a.source.file,
+    line: excluded.has("sourceLocation") ? undefined : a.source.line,
+    column: excluded.has("sourceLocation") ? undefined : a.source.column,
+    resolver: excluded.has("framework") ? undefined : a.source.resolver,
+  })
+
+  if (Object.keys(source).length > 0) {
+    result.source = source
+  }
 
   if (detailLevel === "detailed" || detailLevel === "forensic") {
     if (a.metadata) {
-      result.metadata = a.metadata
+      const rawMetadata = a.metadata as JsonAnnotationMetadata
+      const metadata = pruneUndefined({
+        ...rawMetadata,
+        project_area: excluded.has("projectArea") ? undefined : rawMetadata.project_area,
+        context_hints: excluded.has("contextHints") ? undefined : rawMetadata.context_hints,
+        elementPath: excluded.has("elementPath") ? undefined : rawMetadata.elementPath,
+        fullPath: excluded.has("fullDomPath") ? undefined : rawMetadata.fullPath,
+        cssClasses: excluded.has("cssClasses") ? undefined : rawMetadata.cssClasses,
+        boundingBox: excluded.has("position") ? undefined : rawMetadata.boundingBox,
+        nearbyText: excluded.has("context") ? undefined : rawMetadata.nearbyText,
+        nearbyElements: excluded.has("nearbyElements") ? undefined : rawMetadata.nearbyElements,
+        computedStyles: excluded.has("computedStyles") ? undefined : rawMetadata.computedStyles,
+        accessibility: excluded.has("accessibility") ? undefined : rawMetadata.accessibility,
+      })
+
+      if (Object.keys(metadata).length > 0) {
+        result.metadata = metadata
+      }
     }
   }
 
@@ -73,6 +119,7 @@ export function formatToJSON(
 ): AnnotationExportDocument {
   const detailLevel = options.detailLevel ?? "standard"
   const page = options.page ?? {}
+  const excluded = new Set(options.excludeFields ?? [])
 
   return {
     format: "agentation-vue",
@@ -81,12 +128,12 @@ export function formatToJSON(
     annotationCount: annotations.length,
     page: pruneUndefined({
       pathname: page.pathname ?? "/",
-      viewport: page.viewport,
-      url: page.url,
-      userAgent: page.userAgent,
-      timestamp: page.timestamp,
-      devicePixelRatio: page.devicePixelRatio,
+      viewport: excluded.has("viewport") ? undefined : page.viewport,
+      url: excluded.has("url") ? undefined : page.url,
+      userAgent: excluded.has("userAgent") ? undefined : page.userAgent,
+      timestamp: excluded.has("timestamp") ? undefined : page.timestamp,
+      devicePixelRatio: excluded.has("devicePixelRatio") ? undefined : page.devicePixelRatio,
     }),
-    annotations: annotations.map((a) => formatAnnotation(a, detailLevel)),
+    annotations: annotations.map((a) => formatAnnotation(a, detailLevel, excluded)),
   }
 }

@@ -14,10 +14,18 @@ function makeMockBridge(): RuntimeBridge {
       clear: vi.fn(),
     },
     sync: {
+      info: {
+        endpoint: "http://localhost:4747",
+        mcpEndpoint: "http://localhost:4748",
+        mcpHttpUrl: "http://localhost:4748/mcp",
+        mcpSseUrl: "http://localhost:4748/sse",
+      },
       init: vi.fn().mockResolvedValue(undefined),
       enqueueUpsert: vi.fn(),
       enqueueUpdate: vi.fn(),
       enqueueDelete: vi.fn(),
+      subscribe: vi.fn().mockReturnValue(() => {}),
+      dispose: vi.fn(),
     },
     resolveSource: vi.fn().mockReturnValue({
       framework: "vue",
@@ -93,6 +101,8 @@ describe("createAnnotationsStore", () => {
     expect((annotation.metadata as { elementLocator?: { tag?: string } }).elementLocator).toMatchObject({
       tag: "button",
     })
+    expect((annotation.metadata as { project_area?: string }).project_area).toContain("App")
+    expect((annotation.metadata as { context_hints?: string[] }).context_hints?.length).toBeGreaterThan(0)
     expect(store.annotations).toHaveLength(1)
     expect(bridge.storage.save).toHaveBeenCalled()
     expect(bridge.sync!.enqueueUpsert).toHaveBeenCalled()

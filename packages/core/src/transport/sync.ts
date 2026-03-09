@@ -2,12 +2,15 @@ import type { AnnotationV2, Session, SessionWithAnnotations } from "../types/ind
 
 /**
  * Resolves the V2 API base URL from a user-provided endpoint.
- * Ensures all Vue plugin sync traffic goes through `/v2/` routes,
- * keeping the legacy React endpoints untouched.
+ * Ensures all Vue plugin sync traffic goes through `/v2/` routes.
  */
 function resolveV2Base(endpoint: string): string {
   const base = endpoint.replace(/\/+$/, "")
   return base.endsWith("/v2") ? base : `${base}/v2`
+}
+
+export function resolveV2Endpoint(endpoint: string): string {
+  return resolveV2Base(endpoint)
 }
 
 export async function listSessions(endpoint: string): Promise<Session[]> {
@@ -21,11 +24,12 @@ export async function listSessions(endpoint: string): Promise<Session[]> {
 export async function createSession(
   endpoint: string,
   url: string,
+  projectId?: string,
 ): Promise<Session> {
   const response = await fetch(`${resolveV2Base(endpoint)}/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({ url, projectId }),
   })
   if (!response.ok) {
     throw new Error(`Failed to create session: ${response.status}`)
@@ -86,30 +90,4 @@ export async function deleteAnnotation(
   if (!response.ok) {
     throw new Error(`Failed to delete annotation: ${response.status}`)
   }
-}
-
-export interface ActionResponse {
-  success: boolean
-  annotationCount: number
-  delivered: {
-    sseListeners: number
-    webhooks: number
-    total: number
-  }
-}
-
-export async function requestAction(
-  endpoint: string,
-  sessionId: string,
-  output: string,
-): Promise<ActionResponse> {
-  const response = await fetch(`${endpoint}/sessions/${sessionId}/action`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ output }),
-  })
-  if (!response.ok) {
-    throw new Error(`Failed to request action: ${response.status}`)
-  }
-  return response.json()
 }

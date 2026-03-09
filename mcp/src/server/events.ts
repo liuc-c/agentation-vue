@@ -3,7 +3,15 @@
  * Coordinates SSE streams, MCP notifications, and future webhooks.
  */
 
-import type { AFSEvent, AFSEventType, Annotation, Session, ThreadMessage, ActionRequest } from "../types.js";
+import type {
+  AFSEvent,
+  AFSEventType,
+  Annotation,
+  AnnotationV2,
+  Session,
+  ThreadMessage,
+  ActionRequest,
+} from "../types.js";
 
 type EventHandler = (event: AFSEvent) => void;
 
@@ -51,7 +59,7 @@ class EventBus {
   emit(
     type: AFSEventType,
     sessionId: string,
-    payload: Annotation | Session | ThreadMessage | ActionRequest
+    payload: Annotation | AnnotationV2 | Session | ThreadMessage | ActionRequest
   ): AFSEvent {
     const event: AFSEvent = {
       type,
@@ -178,7 +186,7 @@ class UserEventBus {
     userId: string,
     type: AFSEventType,
     sessionId: string,
-    payload: Annotation | Session | ThreadMessage | ActionRequest
+    payload: Annotation | AnnotationV2 | Session | ThreadMessage | ActionRequest
   ): AFSEvent {
     const event: AFSEvent = {
       type,

@@ -155,6 +155,29 @@ function initDatabase(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_events_session_seq ON events(session_id, sequence);
     CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id);
   `);
+
+  ensureColumn(db, "annotations_v2", "intent TEXT");
+  ensureColumn(db, "annotations_v2", "severity TEXT");
+  ensureColumn(db, "annotations_v2", "status TEXT DEFAULT 'pending'");
+  ensureColumn(db, "annotations_v2", "thread TEXT");
+  ensureColumn(db, "annotations_v2", "resolved_at TEXT");
+  ensureColumn(db, "annotations_v2", "resolved_by TEXT");
+  ensureColumn(db, "annotations_v2", "author_id TEXT");
+}
+
+function ensureColumn(
+  db: Database.Database,
+  tableName: string,
+  columnDefinition: string,
+): void {
+  const columnName = columnDefinition.trim().split(/\s+/, 1)[0];
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: string }>;
+
+  if (columns.some((column) => column.name === columnName)) {
+    return;
+  }
+
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnDefinition}`);
 }
 
 // -----------------------------------------------------------------------------
@@ -256,9 +279,16 @@ function rowToAnnotationV2(row: Record<string, unknown>): AnnotationV2 {
     comment: row.comment as string,
     source: JSON.parse(row.source as string),
     metadata: row.metadata ? JSON.parse(row.metadata as string) : undefined,
+    intent: row.intent as AnnotationV2["intent"],
+    severity: row.severity as AnnotationV2["severity"],
+    status: row.status as AnnotationV2["status"] | undefined,
+    thread: row.thread ? JSON.parse(row.thread as string) : undefined,
     sessionId: row.session_id as string,
     createdAt: row.created_at as string | undefined,
     updatedAt: row.updated_at as string | undefined,
+    resolvedAt: row.resolved_at as string | undefined,
+    resolvedBy: row.resolved_by as AnnotationV2["resolvedBy"],
+    authorId: row.author_id as string | undefined,
   };
 }
 
@@ -339,15 +369,20 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
     insertAnnotationV2: db.prepare(`
       INSERT INTO annotations_v2 (
         id, session_id, schema_version, timestamp, url, element_selector,
-        element_text, comment, source, metadata, created_at, updated_at
+        element_text, comment, source, metadata, intent, severity, status,
+        thread, created_at, updated_at, resolved_at, resolved_by, author_id
       ) VALUES (
         @id, @sessionId, @schemaVersion, @timestamp, @url, @elementSelector,
-        @elementText, @comment, @source, @metadata, @createdAt, @updatedAt
+        @elementText, @comment, @source, @metadata, @intent, @severity, @status,
+        @thread, @createdAt, @updatedAt, @resolvedAt, @resolvedBy, @authorId
       )
     `),
     getAnnotationV2: db.prepare("SELECT * FROM annotations_v2 WHERE id = ?"),
     getAnnotationsV2BySession: db.prepare(
       "SELECT * FROM annotations_v2 WHERE session_id = ? ORDER BY created_at"
+    ),
+    getPendingAnnotationsV2: db.prepare(
+      "SELECT * FROM annotations_v2 WHERE session_id = ? AND status = 'pending' ORDER BY created_at"
     ),
     updateAnnotationV2: db.prepare(`
       UPDATE annotations_v2 SET
@@ -355,6 +390,12 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
         comment = COALESCE(@comment, comment),
         source = COALESCE(@source, source),
         metadata = COALESCE(@metadata, metadata),
+        intent = COALESCE(@intent, intent),
+        severity = COALESCE(@severity, severity),
+        status = COALESCE(@status, status),
+        thread = COALESCE(@thread, thread),
+        resolved_at = COALESCE(@resolvedAt, resolved_at),
+        resolved_by = COALESCE(@resolvedBy, resolved_by),
         updated_at = @updatedAt
       WHERE id = @id
     `),
@@ -612,6 +653,7 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
       const annotation: AnnotationV2 = {
         ...data,
         sessionId,
+        status: data.status ?? "pending",
         createdAt: new Date().toISOString(),
       };
 
@@ -626,9 +668,19 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
         comment: annotation.comment,
         source: JSON.stringify(annotation.source),
         metadata: annotation.metadata ? JSON.stringify(annotation.metadata) : null,
+        intent: annotation.intent ?? null,
+        severity: annotation.severity ?? null,
+        status: annotation.status ?? "pending",
+        thread: annotation.thread ? JSON.stringify(annotation.thread) : null,
         createdAt: annotation.createdAt,
         updatedAt: null,
+        resolvedAt: annotation.resolvedAt ?? null,
+        resolvedBy: annotation.resolvedBy ?? null,
+        authorId: annotation.authorId ?? null,
       });
+
+      const event = eventBus.emit("annotation.created", sessionId, annotation);
+      persistEvent(event);
 
       return annotation;
     },
@@ -651,10 +703,66 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
         comment: data.comment ?? null,
         source: data.source ? JSON.stringify(data.source) : null,
         metadata: data.metadata ? JSON.stringify(data.metadata) : null,
+        intent: data.intent ?? null,
+        severity: data.severity ?? null,
+        status: data.status ?? null,
+        thread: data.thread ? JSON.stringify(data.thread) : null,
+        resolvedAt: data.resolvedAt ?? null,
+        resolvedBy: data.resolvedBy ?? null,
         updatedAt: new Date().toISOString(),
       });
 
-      return this.getAnnotationV2(id);
+      const updated = this.getAnnotationV2(id);
+      if (updated && existing.sessionId) {
+        const event = eventBus.emit("annotation.updated", existing.sessionId, updated);
+        persistEvent(event);
+      }
+
+      return updated;
+    },
+
+    updateAnnotationV2Status(
+      id: string,
+      status: AnnotationStatus,
+      resolvedBy?: "human" | "agent",
+    ): AnnotationV2 | undefined {
+      const isResolved = status === "resolved" || status === "dismissed";
+      return this.updateAnnotationV2(id, {
+        status,
+        resolvedAt: isResolved ? new Date().toISOString() : undefined,
+        resolvedBy: isResolved ? (resolvedBy || "agent") : undefined,
+      });
+    },
+
+    addThreadMessageV2(
+      annotationId: string,
+      role: "human" | "agent",
+      content: string,
+    ): AnnotationV2 | undefined {
+      const existing = this.getAnnotationV2(annotationId);
+      if (!existing) return undefined;
+
+      const message: ThreadMessage = {
+        id: generateId(),
+        role,
+        content,
+        timestamp: new Date().toISOString(),
+      };
+
+      const thread = [...(existing.thread || []), message];
+      const updated = this.updateAnnotationV2(annotationId, { thread });
+
+      if (updated && existing.sessionId) {
+        const event = eventBus.emit("thread.message", existing.sessionId, message);
+        persistEvent(event);
+      }
+
+      return updated;
+    },
+
+    getPendingAnnotationsV2(sessionId: string): AnnotationV2[] {
+      const rows = stmts.getPendingAnnotationsV2.all(sessionId) as Record<string, unknown>[];
+      return rows.map(rowToAnnotationV2);
     },
 
     getSessionAnnotationsV2(sessionId: string): AnnotationV2[] {
@@ -666,6 +774,10 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
       const existing = this.getAnnotationV2(id);
       if (!existing) return undefined;
       stmts.deleteAnnotationV2.run(id);
+      if (existing.sessionId) {
+        const event = eventBus.emit("annotation.deleted", existing.sessionId, existing);
+        persistEvent(event);
+      }
       return existing;
     },
 

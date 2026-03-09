@@ -70,4 +70,57 @@ describe("formatToJSON", () => {
     const result = formatToJSON([])
     expect(result.detailLevel).toBe("standard")
   })
+
+  it("excludes configured fields from json output", () => {
+    const result = formatToJSON([makeAnnotation({
+      elementText: "Click me",
+      source: {
+        framework: "vue",
+        componentName: "App",
+        componentHierarchy: "App > Hero > CTA",
+        file: "src/App.vue",
+        line: 10,
+        column: 2,
+        resolver: "vue-tracer",
+      },
+      metadata: {
+        project_area: "/home :: Hero",
+        context_hints: ["heading: Hero"],
+        elementPath: "main > button",
+        cssClasses: "btn primary",
+        boundingBox: { x: 10, y: 20, width: 30, height: 40 },
+        nearbyText: "Primary CTA",
+      },
+    })], {
+      detailLevel: "forensic",
+      page: {
+        pathname: "/home",
+        viewport: { width: 1440, height: 900 },
+        url: "http://localhost/home",
+        userAgent: "Vitest",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        devicePixelRatio: 2,
+      },
+      excludeFields: ["projectArea", "sourceLocation", "framework", "selectedText", "context", "url", "timestamp", "viewport"],
+    })
+
+    expect(result.page.viewport).toBeUndefined()
+    expect(result.page.url).toBeUndefined()
+    expect(result.page.timestamp).toBeUndefined()
+
+    const annotation = result.annotations[0]
+    expect(annotation.url).toBeUndefined()
+    expect(annotation.timestamp).toBeUndefined()
+    expect(annotation.elementText).toBeUndefined()
+    expect(annotation.source).toEqual({
+      componentName: "App",
+      componentHierarchy: "App > Hero > CTA",
+    })
+    expect(annotation.metadata).toEqual({
+      context_hints: ["heading: Hero"],
+      elementPath: "main > button",
+      cssClasses: "btn primary",
+      boundingBox: { x: 10, y: 20, width: 30, height: 40 },
+    })
+  })
 })

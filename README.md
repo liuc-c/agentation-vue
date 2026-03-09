@@ -165,13 +165,23 @@ Markdown, connect the overlay to `agentation-vue-mcp`.
 agentation({
   sync: {
     endpoint: "http://localhost:4747",
+    mcpEndpoint: "http://localhost:4748", // optional, defaults to API port + 1
+    projectId: "demo-app",                // optional explicit project scope
     autoSync: true,
     debounceMs: 400,
+    ensureServer: true,
   },
 })
 ```
 
-Start the server from this repo:
+`sync` is enabled by default during `vite dev`. If you do not want browser
+annotations to sync anywhere, set `sync: false`.
+
+In shared-server mode, multiple local projects can point to the same API and
+MCP transport ports. The Vite plugin health-checks those ports first and
+reuses the existing process when one is already running.
+
+Start the server manually from this repo:
 
 ```bash
 pnpm mcp
@@ -180,8 +190,27 @@ pnpm mcp
 Or use the published MCP package directly:
 
 ```bash
-npx agentation-vue-mcp server
+npx agentation-vue-mcp server --port 4747 --mcp-port 4748
 ```
+
+The browser sync API listens on `4747` by default. MCP clients connect to
+`4748` over either streamable HTTP (`/mcp`), legacy SSE (`/sse`), or stdio.
+
+### Get Started Flow
+
+The toolbar's `Get started` panel mirrors the runtime config and shows:
+
+- The current browser sync API and MCP transport endpoints
+- A ready-to-run CLI command for `agentation-vue-mcp server`
+- A Claude CLI registration command
+- The webhook environment variables the server reads
+
+Recommended local setup:
+
+1. Let all Vite projects share one Agentation server.
+2. Give projects an explicit `projectId` only when you want stricter isolation.
+3. When multiple projects share the server, scope agent reads with `projectFilter`.
+4. Use webhook forwarding if you want external automations in addition to MCP.
 
 ## Plugin Options
 
@@ -191,7 +220,7 @@ npx agentation-vue-mcp server
 | `locale` | `"en" \| "zh-CN"` | `"en"` | Default UI locale. |
 | `storagePrefix` | `string` | `"agentation-vue-"` | Prefix for persisted annotation data in storage. |
 | `outputDetail` | `"compact" \| "standard" \| "detailed" \| "forensic"` | `"standard"` | Controls how much metadata is included in exports. |
-| `sync` | `{ endpoint: string, autoSync?: boolean, debounceMs?: number } \| false` | `false` | Sends annotations to an MCP/HTTP server. |
+| `sync` | `{ endpoint?: string, mcpEndpoint?: string, projectId?: string, autoSync?: boolean, debounceMs?: number, ensureServer?: boolean } \| false` | enabled in `serve` | Sends annotations to the shared Agentation V2 API and MCP workflow server. |
 | `inspector` | `"tracer"` | `"tracer"` | Source resolution strategy. Reserved for future alternatives. |
 
 ## Output Detail Levels

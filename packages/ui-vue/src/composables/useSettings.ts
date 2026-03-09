@@ -1,7 +1,8 @@
 import { reactive, watch } from "vue"
-import type { OutputDetailLevel } from "@liuovo/agentation-vue-core"
+import type { ExportExcludeField, OutputDetailLevel } from "@liuovo/agentation-vue-core"
 import { DEFAULT_LOCALE, isValidLocale } from "../i18n/index.js"
 import type { ColorKey, Locale } from "../i18n/types.js"
+import { COPY_EXCLUDE_FIELDS } from "../copy-fields.js"
 
 // ---------------------------------------------------------------------------
 // Settings state — persistent user preferences
@@ -38,6 +39,10 @@ export interface SettingsState {
   showMarkers: boolean
   /** Preferred export format for copy actions. */
   copyFormat: CopyFormat
+  /** Prompt prefix prepended before clipboard output. */
+  copyPrefix: string
+  /** Export detail fields to remove from clipboard output. */
+  copyExcludeFields: ExportExcludeField[]
   /** Whether to clear annotations after a successful copy. */
   autoClearAfterCopy: boolean
   /** Whether page interactions are blocked while annotating. */
@@ -61,6 +66,8 @@ interface PersistedSettings {
   annotationColor?: string
   showMarkers?: boolean
   copyFormat?: CopyFormat
+  copyPrefix?: string
+  copyExcludeFields?: ExportExcludeField[]
   autoClearAfterCopy?: boolean
   blockInteractions?: boolean
   locale?: Locale
@@ -83,6 +90,10 @@ export function createSettingsState(defaults?: Partial<PersistedSettings>): Sett
     annotationColor: persisted.annotationColor ?? defaults?.annotationColor ?? DEFAULT_ANNOTATION_COLOR,
     showMarkers: persisted.showMarkers ?? defaults?.showMarkers ?? true,
     copyFormat: persisted.copyFormat ?? defaults?.copyFormat ?? "markdown",
+    copyPrefix: persisted.copyPrefix ?? defaults?.copyPrefix ?? "",
+    copyExcludeFields: normalizeCopyExcludeFields(persisted.copyExcludeFields)
+      ?? normalizeCopyExcludeFields(defaults?.copyExcludeFields)
+      ?? [],
     autoClearAfterCopy: persisted.autoClearAfterCopy ?? defaults?.autoClearAfterCopy ?? false,
     blockInteractions: persisted.blockInteractions ?? defaults?.blockInteractions ?? true,
     locale: normalizeLocale(persisted.locale) ?? normalizeLocale(defaults?.locale) ?? DEFAULT_LOCALE,
@@ -100,6 +111,8 @@ export function createSettingsState(defaults?: Partial<PersistedSettings>): Sett
       annotationColor: state.annotationColor,
       showMarkers: state.showMarkers,
       copyFormat: state.copyFormat,
+      copyPrefix: state.copyPrefix,
+      copyExcludeFields: state.copyExcludeFields,
       autoClearAfterCopy: state.autoClearAfterCopy,
       blockInteractions: state.blockInteractions,
       locale: state.locale,
@@ -125,6 +138,10 @@ export function createSettingsState(defaults?: Partial<PersistedSettings>): Sett
     set showMarkers(v: boolean) { state.showMarkers = v },
     get copyFormat() { return state.copyFormat },
     set copyFormat(v: CopyFormat) { state.copyFormat = v },
+    get copyPrefix() { return state.copyPrefix },
+    set copyPrefix(v: string) { state.copyPrefix = v },
+    get copyExcludeFields() { return state.copyExcludeFields },
+    set copyExcludeFields(v: ExportExcludeField[]) { state.copyExcludeFields = normalizeCopyExcludeFields(v) ?? [] },
     get autoClearAfterCopy() { return state.autoClearAfterCopy },
     set autoClearAfterCopy(v: boolean) { state.autoClearAfterCopy = v },
     get blockInteractions() { return state.blockInteractions },
@@ -150,6 +167,15 @@ function normalizeLocale(value: unknown): Locale | undefined {
   return isValidLocale(value) ? value : undefined
 }
 
+function normalizeCopyExcludeFields(value: unknown): ExportExcludeField[] | undefined {
+  if (!Array.isArray(value)) return undefined
+
+  const allowed = new Set<ExportExcludeField>(COPY_EXCLUDE_FIELDS)
+  return [...new Set(
+    value.filter((field): field is ExportExcludeField => allowed.has(field as ExportExcludeField)),
+  )]
+}
+
 function loadSettings(): PersistedSettings {
   if (typeof window === "undefined") return {}
   try {
@@ -159,6 +185,7 @@ function loadSettings(): PersistedSettings {
     return {
       ...parsed,
       locale: normalizeLocale(parsed.locale),
+      copyExcludeFields: normalizeCopyExcludeFields(parsed.copyExcludeFields) ?? [],
     }
   } catch {
     return {}

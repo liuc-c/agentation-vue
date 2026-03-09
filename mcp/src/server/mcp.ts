@@ -1,762 +1,1108 @@
-/**
- * MCP server for Agentation.
- * Exposes tools for AI agents to interact with annotations.
- *
- * This server fetches data from the HTTP API (single source of truth)
- * rather than maintaining its own store.
- *
- * // TODO(phase6): Add MCP tools for V2 annotations (getSessionV2, getPendingV2, etc.)
- * // Currently, MCP tools only see legacy React annotations.
- * // V2 Vue annotations are accessible via the /v2/ HTTP API but not yet
- * // surfaced through the MCP tool layer.
- */
-
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createServer, type IncomingMessage, type ServerResponse } from "http"
+import { randomUUID } from "crypto"
+import { Server } from "@modelcontextprotocol/sdk/server/index.js"
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js"
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
-import type { ActionRequest } from "../types.js";
+} from "@modelcontextprotocol/sdk/types.js"
+import { z } from "zod"
+import {
+  filterSessionsByProject,
+  groupSessionsByProject,
+  inferProjectKey,
+} from "./project-scope.js"
+import type {
+  AnnotationStatus,
+  AnnotationV2,
+  Session,
+  SessionWithAnnotationsV2,
+} from "../types.js"
 
-// -----------------------------------------------------------------------------
-// Configuration
-// -----------------------------------------------------------------------------
+let httpBaseUrl = "http://localhost:4747"
+let apiKey: string | undefined
 
-let httpBaseUrl = "http://localhost:4747";
-let apiKey: string | undefined;
-
-/**
- * Set the HTTP server URL that this MCP server will fetch from.
- */
 export function setHttpBaseUrl(url: string): void {
-  httpBaseUrl = url;
+  httpBaseUrl = url.replace(/\/+$/, "")
 }
 
-/**
- * Set the API key for authenticating with the cloud backend.
- */
 export function setApiKey(key: string): void {
-  apiKey = key;
+  apiKey = key
 }
 
-// -----------------------------------------------------------------------------
-// HTTP Client
-// -----------------------------------------------------------------------------
-
-async function httpGet<T>(path: string): Promise<T> {
-  const headers: Record<string, string> = {};
-  if (apiKey) {
-    headers["x-api-key"] = apiKey;
-  }
-  const res = await fetch(`${httpBaseUrl}${path}`, { headers });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`HTTP ${res.status}: ${body}`);
-  }
-  return res.json() as Promise<T>;
+type ToolResult = {
+  content: Array<{ type: "text"; text: string }>
+  isError?: boolean
 }
 
-async function httpPatch<T>(path: string, body: unknown): Promise<T> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (apiKey) {
-    headers["x-api-key"] = apiKey;
-  }
-  const res = await fetch(`${httpBaseUrl}${path}`, {
-    method: "PATCH",
-    headers,
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`HTTP ${res.status}: ${text}`);
-  }
-  return res.json() as Promise<T>;
+interface PendingResponse {
+  count: number
+  annotations: AnnotationV2[]
 }
 
-async function httpPost<T>(path: string, body: unknown): Promise<T> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (apiKey) {
-    headers["x-api-key"] = apiKey;
-  }
-  const res = await fetch(`${httpBaseUrl}${path}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`HTTP ${res.status}: ${text}`);
-  }
-  return res.json() as Promise<T>;
+interface AgentContextMetadata {
+  project_area?: string
+  context_hints?: string[]
 }
 
-// -----------------------------------------------------------------------------
-// Tool Schemas
-// -----------------------------------------------------------------------------
-
-const GetPendingSchema = z.object({
-  sessionId: z.string().describe("The session ID to get pending annotations for"),
-});
-
-const AcknowledgeSchema = z.object({
-  annotationId: z.string().describe("The annotation ID to acknowledge"),
-});
-
-const ResolveSchema = z.object({
-  annotationId: z.string().describe("The annotation ID to resolve"),
-  summary: z.string().optional().describe("Optional summary of how it was resolved"),
-});
-
-const DismissSchema = z.object({
-  annotationId: z.string().describe("The annotation ID to dismiss"),
-  reason: z.string().describe("Reason for dismissing this annotation"),
-});
-
-const ReplySchema = z.object({
-  annotationId: z.string().describe("The annotation ID to reply to"),
-  message: z.string().describe("The reply message"),
-});
+const ListProjectsSchema = z.object({
+  projectFilter: z.string().optional(),
+})
 
 const GetSessionSchema = z.object({
-  sessionId: z.string().describe("The session ID to get"),
-});
+  sessionId: z.string(),
+})
 
-const WatchAnnotationsSchema = z.object({
-  sessionId: z.string().optional().describe("Optional session ID to filter. If not provided, watches ALL sessions."),
-  batchWindowSeconds: z.number().optional().default(10).describe("Seconds to wait after first annotation before returning batch (default: 10, max: 60)"),
-  timeoutSeconds: z.number().optional().default(120).describe("Max seconds to wait for first annotation (default: 120, max: 300)"),
-});
+const GetPendingSchema = z.object({
+  sessionId: z.string().optional(),
+  projectFilter: z.string().optional(),
+})
 
-// -----------------------------------------------------------------------------
-// Tool Definitions
-// -----------------------------------------------------------------------------
+const StatusSchema = z.object({
+  annotationId: z.string(),
+})
+
+const ResolveSchema = z.object({
+  annotationId: z.string(),
+  summary: z.string().optional(),
+})
+
+const DismissSchema = z.object({
+  annotationId: z.string(),
+  reason: z.string().min(1),
+})
+
+const ReplySchema = z.object({
+  annotationId: z.string(),
+  message: z.string().min(1),
+})
+
+const WatchSchema = z.object({
+  sessionId: z.string().optional(),
+  projectFilter: z.string().optional(),
+  batchWindowSeconds: z.number().optional().default(5),
+  timeoutSeconds: z.number().optional().default(120),
+})
+
+const DeleteProjectSchema = z.object({
+  projectFilter: z.string().min(1),
+  confirm: z.boolean().optional().default(false),
+})
 
 export const TOOLS = [
   {
-    name: "agentation_list_sessions",
-    description: "List all active annotation sessions",
+    name: "agentation_v2_list_projects",
+    description: "List project groups currently tracked by the shared Agentation V2 server.",
     inputSchema: {
       type: "object" as const,
-      properties: {},
+      properties: {
+        projectFilter: {
+          type: "string",
+          description: "Optional fuzzy filter against projectId, host, origin, pathname, or inferred project key.",
+        },
+      },
       required: [],
     },
   },
   {
-    name: "agentation_get_session",
-    description: "Get a session with all its annotations",
+    name: "agentation_v2_get_session",
+    description: "Get one V2 session with workflow fields, source mapping, and agent-friendly metadata.",
     inputSchema: {
       type: "object" as const,
       properties: {
         sessionId: {
           type: "string",
-          description: "The session ID to get",
+          description: "Exact session ID to inspect.",
         },
       },
       required: ["sessionId"],
     },
   },
   {
-    name: "agentation_get_pending",
-    description:
-      "Get all pending (unacknowledged) annotations for a session. Use this to see what feedback the human has given that needs attention.",
+    name: "agentation_v2_get_pending",
+    description: "Get pending V2 annotations. Requires an explicit project filter when multiple projects share the server.",
     inputSchema: {
       type: "object" as const,
       properties: {
         sessionId: {
           type: "string",
-          description: "The session ID to get pending annotations for",
+          description: "Exact session ID to scope to.",
+        },
+        projectFilter: {
+          type: "string",
+          description: "Project filter to scope to when multiple projects share the server.",
         },
       },
-      required: ["sessionId"],
-    },
-  },
-  {
-    name: "agentation_get_all_pending",
-    description:
-      "Get all pending annotations across ALL sessions. Use this to see all unaddressed feedback from the human across all pages they've visited.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {},
       required: [],
     },
   },
   {
-    name: "agentation_acknowledge",
-    description:
-      "Mark an annotation as acknowledged. Use this to let the human know you've seen their feedback and will address it.",
+    name: "agentation_v2_acknowledge",
+    description: "Mark an annotation as acknowledged so the browser reflects that the agent has picked it up.",
     inputSchema: {
       type: "object" as const,
       properties: {
         annotationId: {
           type: "string",
-          description: "The annotation ID to acknowledge",
+          description: "Exact annotation ID.",
         },
       },
       required: ["annotationId"],
     },
   },
   {
-    name: "agentation_resolve",
-    description:
-      "Mark an annotation as resolved. Use this after you've addressed the feedback. Optionally include a summary of what you did.",
+    name: "agentation_v2_resolve",
+    description: "Resolve an annotation and optionally add a short completion summary to the thread.",
     inputSchema: {
       type: "object" as const,
       properties: {
         annotationId: {
           type: "string",
-          description: "The annotation ID to resolve",
+          description: "Exact annotation ID.",
         },
         summary: {
           type: "string",
-          description: "Optional summary of how it was resolved",
+          description: "Optional summary to append as an agent reply.",
         },
       },
       required: ["annotationId"],
     },
   },
   {
-    name: "agentation_dismiss",
-    description:
-      "Dismiss an annotation. Use this when you've decided not to address the feedback, with a reason why.",
+    name: "agentation_v2_dismiss",
+    description: "Dismiss an annotation and record the reason in the thread.",
     inputSchema: {
       type: "object" as const,
       properties: {
         annotationId: {
           type: "string",
-          description: "The annotation ID to dismiss",
+          description: "Exact annotation ID.",
         },
         reason: {
           type: "string",
-          description: "Reason for dismissing this annotation",
+          description: "Why the annotation is being dismissed.",
         },
       },
       required: ["annotationId", "reason"],
     },
   },
   {
-    name: "agentation_reply",
-    description:
-      "Add a reply to an annotation's thread. Use this to ask clarifying questions or provide updates to the human.",
+    name: "agentation_v2_reply",
+    description: "Reply to an annotation thread without changing its workflow status.",
     inputSchema: {
       type: "object" as const,
       properties: {
         annotationId: {
           type: "string",
-          description: "The annotation ID to reply to",
+          description: "Exact annotation ID.",
         },
         message: {
           type: "string",
-          description: "The reply message",
+          description: "Reply text.",
         },
       },
       required: ["annotationId", "message"],
     },
   },
   {
-    name: "agentation_watch_annotations",
-    description:
-      "Block until new annotations appear, then collect a batch and return them. " +
-      "Triggers automatically when annotations are created — the user just annotates in the browser " +
-      "and the agent picks them up. After detecting the first new annotation, waits for a batch window " +
-      "to collect more before returning. Use in a loop for hands-free processing. " +
-      "After addressing each annotation, call agentation_resolve with the annotation ID and a summary " +
-      "of what you did. Only resolve annotations the user accepted — if the user rejects your change, " +
-      "leave the annotation open.",
+    name: "agentation_v2_watch_annotations",
+    description: "Block until pending V2 annotations are available, then return a scoped batch. Requires explicit scope when multiple projects share the server.",
     inputSchema: {
       type: "object" as const,
       properties: {
         sessionId: {
           type: "string",
-          description: "Optional session ID to filter. If not provided, watches ALL sessions.",
+          description: "Exact session ID to watch.",
+        },
+        projectFilter: {
+          type: "string",
+          description: "Project filter when using the shared server mode.",
         },
         batchWindowSeconds: {
           type: "number",
-          description: "Seconds to wait after first annotation before returning batch (default: 10, max: 60)",
+          description: "Seconds to keep collecting after the first annotation arrives. Default 5, max 30.",
         },
         timeoutSeconds: {
           type: "number",
-          description: "Max seconds to wait for first annotation (default: 120, max: 300)",
+          description: "Maximum wait time for the first annotation. Default 120, max 300.",
         },
       },
       required: [],
     },
   },
-];
+  {
+    name: "agentation_v2_delete_project_annotations",
+    description: "Dangerous operation. Preview or delete all annotations for one project filter. Requires confirm=true to execute.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        projectFilter: {
+          type: "string",
+          description: "Explicit project filter. Required for safety.",
+        },
+        confirm: {
+          type: "boolean",
+          description: "Set true to actually delete. Omit or false for preview.",
+        },
+      },
+      required: ["projectFilter"],
+    },
+  },
+] as const
 
-// -----------------------------------------------------------------------------
-// Types
-// -----------------------------------------------------------------------------
-
-type Session = {
-  id: string;
-  url: string;
-  status: string;
-  createdAt: string;
-};
-
-type Annotation = {
-  id: string;
-  sessionId: string;
-  comment: string;
-  element: string;
-  elementPath: string;
-  url?: string;
-  intent?: string;
-  severity?: string;
-  timestamp?: number;
-  nearbyText?: string;
-  reactComponents?: string;
-  status: string;
-};
-
-type SessionWithAnnotations = Session & {
-  annotations: Annotation[];
-};
-
-type PendingResponse = {
-  count: number;
-  annotations: Annotation[];
-};
-
-// -----------------------------------------------------------------------------
-// Tool Handlers
-// -----------------------------------------------------------------------------
-
-type ToolResult = {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
-};
-
-export function success(data: unknown): ToolResult {
+function success(data: unknown): ToolResult {
   return {
-    content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
-  };
+    content: [
+      {
+        type: "text",
+        text: typeof data === "string" ? data : JSON.stringify(data, null, 2),
+      },
+    ],
+  }
 }
 
-export function error(message: string): ToolResult {
+export function error(message: string, details?: unknown): ToolResult {
   return {
-    content: [{ type: "text", text: message }],
+    content: [
+      {
+        type: "text",
+        text: details == null
+          ? message
+          : JSON.stringify({ error: message, details }, null, 2),
+      },
+    ],
     isError: true,
-  };
+  }
 }
 
-/**
- * Result from watchForAnnotations
- */
-type WatchAnnotationsResult =
-  | { type: "annotations"; annotations: Annotation[]; sessions: string[] }
-  | { type: "timeout" }
-  | { type: "error"; message: string };
+async function httpRequest<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const headers = new Headers(init?.headers)
+  if (apiKey) {
+    headers.set("x-api-key", apiKey)
+  }
 
-/**
- * Watch for new annotation.created events via SSE from the HTTP server.
- * When the first annotation is detected, waits for a batch window to collect
- * additional annotations directly from SSE event payloads.
- *
- * Initial sync events (sequence 0) are ignored to prevent false triggers
- * from pre-existing pending annotations when the SSE connection opens.
- *
- * Watches for new annotations via SSE and collects them into a batch.
- */
-function watchForAnnotations(
-  sessionId: string | undefined,
-  batchWindowMs: number,
-  timeoutMs: number
-): Promise<WatchAnnotationsResult> {
-  return new Promise((resolve) => {
-    let aborted = false;
-    const controller = new AbortController();
-    let batchTimeout: ReturnType<typeof setTimeout> | null = null;
-    const detectedSessions = new Set<string>();
-    const collectedAnnotations: Annotation[] = [];
+  const response = await fetch(`${httpBaseUrl}${path}`, {
+    ...init,
+    headers,
+  })
 
-    const cleanup = () => {
-      aborted = true;
-      controller.abort();
-      if (batchTimeout) clearTimeout(batchTimeout);
-    };
+  if (!response.ok) {
+    const body = await response.text()
+    throw new Error(`HTTP ${response.status}: ${body}`)
+  }
 
-    // Set overall timeout
-    const timeoutId = setTimeout(() => {
-      cleanup();
-      resolve({ type: "timeout" });
-    }, timeoutMs);
+  if (response.status === 204) {
+    return undefined as T
+  }
 
-    // Connect to SSE endpoint with agent=true to be counted as an agent listener
-    const sseUrl = sessionId
-      ? `${httpBaseUrl}/sessions/${sessionId}/events?agent=true`
-      : `${httpBaseUrl}/events?agent=true`;
+  return response.json() as Promise<T>
+}
 
-    const sseHeaders: Record<string, string> = { Accept: "text/event-stream" };
-    if (apiKey) {
-      sseHeaders["x-api-key"] = apiKey;
+async function httpGet<T>(path: string): Promise<T> {
+  return httpRequest<T>(path)
+}
+
+async function httpPatch<T>(path: string, body: unknown): Promise<T> {
+  return httpRequest<T>(path, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+}
+
+async function httpPost<T>(path: string, body: unknown): Promise<T> {
+  return httpRequest<T>(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+}
+
+async function httpDelete<T>(path: string): Promise<T> {
+  return httpRequest<T>(path, {
+    method: "DELETE",
+  })
+}
+
+function annotationMetadata(annotation: AnnotationV2): AgentContextMetadata {
+  return (annotation.metadata ?? {}) as AgentContextMetadata
+}
+
+function summarizeAnnotation(annotation: AnnotationV2) {
+  const metadata = annotationMetadata(annotation)
+  const source = annotation.source
+  const location = source.line != null
+    ? `${source.file}:${source.line}${source.column != null ? `:${source.column}` : ""}`
+    : source.file
+
+  return {
+    id: annotation.id,
+    status: annotation.status ?? "pending",
+    intent: annotation.intent ?? null,
+    severity: annotation.severity ?? null,
+    element: annotation.elementSelector,
+    comment: annotation.comment,
+    projectArea: metadata.project_area ?? null,
+    contextHints: metadata.context_hints ?? [],
+    url: annotation.url,
+    component: source.componentName,
+    componentHierarchy: source.componentHierarchy ?? null,
+    source: location,
+    updatedAt: annotation.updatedAt ?? annotation.createdAt ?? annotation.timestamp,
+  }
+}
+
+function summarizeSession(session: SessionWithAnnotationsV2) {
+  const pendingCount = session.annotations.filter((annotation) =>
+    (annotation.status ?? "pending") === "pending"
+  ).length
+
+  return {
+    id: session.id,
+    projectKey: inferProjectKey(session),
+    projectId: session.projectId ?? null,
+    url: session.url,
+    status: session.status,
+    createdAt: session.createdAt,
+    annotationCount: session.annotations.length,
+    pendingCount,
+  }
+}
+
+async function fetchSessions(projectFilter?: string): Promise<Session[]> {
+  const query = projectFilter?.trim()
+    ? `?projectFilter=${encodeURIComponent(projectFilter)}`
+    : ""
+
+  return httpGet<Session[]>(`/v2/sessions${query}`)
+}
+
+async function fetchSession(sessionId: string): Promise<SessionWithAnnotationsV2> {
+  return httpGet<SessionWithAnnotationsV2>(`/v2/sessions/${sessionId}`)
+}
+
+async function fetchPending(
+  args: { sessionId?: string; projectFilter?: string },
+): Promise<PendingResponse> {
+  if (args.sessionId) {
+    return httpGet<PendingResponse>(`/v2/sessions/${args.sessionId}/pending`)
+  }
+
+  const query = args.projectFilter?.trim()
+    ? `?projectFilter=${encodeURIComponent(args.projectFilter)}`
+    : ""
+
+  return httpGet<PendingResponse>(`/v2/pending${query}`)
+}
+
+function buildScopeError(projects: ReturnType<typeof groupSessionsByProject>): ToolResult {
+  return error(
+    "Multiple projects share this Agentation server. Pass projectFilter (or sessionId) explicitly before reading pending annotations.",
+    {
+      requiresExplicitScope: true,
+      projects,
+      suggestion: {
+        tool: "agentation_v2_list_projects",
+      },
+    },
+  )
+}
+
+async function resolvePendingScope(args: {
+  sessionId?: string
+  projectFilter?: string
+}): Promise<
+  | { ok: true; sessions: Session[]; projectFilter?: string }
+  | { ok: false; response: ToolResult }
+> {
+  if (args.sessionId) {
+    const session = await fetchSession(args.sessionId)
+    return {
+      ok: true,
+      sessions: [{
+        id: session.id,
+        url: session.url,
+        status: session.status,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        projectId: session.projectId,
+        metadata: session.metadata,
+      }],
+      projectFilter: args.projectFilter,
     }
+  }
+
+  const sessions = await fetchSessions()
+  const projectGroups = groupSessionsByProject(sessions)
+
+  if (args.projectFilter?.trim()) {
+    const filtered = filterSessionsByProject(sessions, args.projectFilter)
+    if (filtered.length === 0) {
+      return {
+        ok: false,
+        response: error(`No sessions matched projectFilter "${args.projectFilter}"`, {
+          projects: projectGroups,
+        }),
+      }
+    }
+
+    return {
+      ok: true,
+      sessions: filtered,
+      projectFilter: args.projectFilter,
+    }
+  }
+
+  if (projectGroups.length <= 1) {
+    return {
+      ok: true,
+      sessions,
+      projectFilter: projectGroups[0]?.projectKey,
+    }
+  }
+
+  return {
+    ok: false,
+    response: buildScopeError(projectGroups),
+  }
+}
+
+type WatchResult =
+  | { type: "annotations"; annotations: AnnotationV2[]; sessionIds: string[] }
+  | { type: "timeout" }
+  | { type: "error"; message: string }
+
+function watchForAnnotations(
+  args: {
+    sessionId?: string
+    projectFilter?: string
+  },
+  batchWindowMs: number,
+  timeoutMs: number,
+): Promise<WatchResult> {
+  return new Promise((resolve) => {
+    let aborted = false
+    const controller = new AbortController()
+    let batchTimer: ReturnType<typeof setTimeout> | null = null
+    const collected = new Map<string, AnnotationV2>()
+    const sessionIds = new Set<string>()
+
+    const sseUrl = args.sessionId
+      ? `${httpBaseUrl}/v2/sessions/${args.sessionId}/events`
+      : `${httpBaseUrl}/v2/events${args.projectFilter ? `?projectFilter=${encodeURIComponent(args.projectFilter)}` : ""}`
+
+    const finish = (result: WatchResult) => {
+      if (aborted) return
+      aborted = true
+      controller.abort()
+      if (batchTimer) {
+        clearTimeout(batchTimer)
+      }
+      clearTimeout(timeoutId)
+      resolve(result)
+    }
+
+    const timeoutId = setTimeout(() => {
+      finish({ type: "timeout" })
+    }, timeoutMs)
 
     fetch(sseUrl, {
       signal: controller.signal,
-      headers: sseHeaders,
+      headers: { Accept: "text/event-stream" },
     })
-      .then(async (res) => {
-        if (!res.ok) {
-          clearTimeout(timeoutId);
-          cleanup();
-          resolve({ type: "error", message: `HTTP server returned ${res.status}: ${res.statusText}` });
-          return;
-        }
-        if (!res.body) {
-          clearTimeout(timeoutId);
-          cleanup();
-          resolve({ type: "error", message: "No response body from SSE endpoint" });
-          return;
+      .then(async (response) => {
+        if (!response.ok) {
+          finish({
+            type: "error",
+            message: `MCP event stream failed with HTTP ${response.status}`,
+          })
+          return
         }
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
+        if (!response.body) {
+          finish({
+            type: "error",
+            message: "MCP event stream returned no body",
+          })
+          return
+        }
+
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ""
 
         while (!aborted) {
-          const { done, value } = await reader.read();
+          const { done, value } = await reader.read()
           if (done) {
-            if (!aborted) {
-              clearTimeout(timeoutId);
-              cleanup();
-              if (collectedAnnotations.length > 0) {
-                resolve({
-                  type: "annotations",
-                  annotations: collectedAnnotations,
-                  sessions: Array.from(detectedSessions),
-                });
-              } else {
-                resolve({ type: "error", message: "SSE connection closed unexpectedly. The agentation server may have restarted." });
-              }
+            if (collected.size > 0) {
+              finish({
+                type: "annotations",
+                annotations: [...collected.values()],
+                sessionIds: [...sessionIds],
+              })
+            } else {
+              finish({
+                type: "error",
+                message: "MCP event stream closed unexpectedly",
+              })
             }
-            return;
+            return
           }
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
+          buffer += decoder.decode(value, { stream: true })
+          const events = buffer.split("\n\n")
+          buffer = events.pop() || ""
 
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              try {
-                const event = JSON.parse(line.slice(6));
-                if (event.type === "annotation.created") {
-                  // Skip initial sync events (sequence 0) — historical replay, not new
-                  if (event.sequence === 0) continue;
+          for (const rawEvent of events) {
+            const dataLine = rawEvent
+              .split("\n")
+              .find((line) => line.startsWith("data: "))
 
-                  // If filtering by session, check it matches
-                  if (sessionId && event.sessionId !== sessionId) continue;
+            if (!dataLine) continue
 
-                  detectedSessions.add(event.sessionId);
-                  collectedAnnotations.push(event.payload as Annotation);
-
-                  // First annotation detected — start batch window
-                  if (!batchTimeout) {
-                    batchTimeout = setTimeout(() => {
-                      clearTimeout(timeoutId);
-                      cleanup();
-                      resolve({
-                        type: "annotations",
-                        annotations: collectedAnnotations,
-                        sessions: Array.from(detectedSessions),
-                      });
-                    }, batchWindowMs);
-                  }
-                }
-              } catch {
-                // Ignore parse errors for individual events
+            try {
+              const event = JSON.parse(dataLine.slice(6)) as {
+                type?: string
+                sessionId?: string
+                payload?: AnnotationV2
+                sequence?: number
               }
+
+              if (event.type !== "annotation.created") continue
+              if (!event.payload?.id) continue
+              if (event.sequence === 0) continue
+
+              collected.set(event.payload.id, event.payload)
+              if (event.sessionId) {
+                sessionIds.add(event.sessionId)
+              }
+
+              if (!batchTimer) {
+                batchTimer = setTimeout(() => {
+                  finish({
+                    type: "annotations",
+                    annotations: [...collected.values()],
+                    sessionIds: [...sessionIds],
+                  })
+                }, batchWindowMs)
+              }
+            } catch {
+              // Ignore individual malformed events.
             }
           }
         }
       })
       .catch((err) => {
-        // Connection error or aborted
-        if (!aborted) {
-          clearTimeout(timeoutId);
-          const message = err instanceof Error ? err.message : "Unknown connection error";
-          // Check for common connection errors
-          if (message.includes("ECONNREFUSED") || message.includes("fetch failed")) {
-            resolve({ type: "error", message: `Cannot connect to HTTP server at ${httpBaseUrl}. Is the agentation server running?` });
-          } else if (message.includes("abort")) {
-            // Aborted by timeout - already handled
-            resolve({ type: "timeout" });
-          } else {
-            resolve({ type: "error", message: `Connection error: ${message}` });
-          }
-        }
-      });
-  });
+        if (aborted) return
+        finish({
+          type: "error",
+          message: err instanceof Error ? err.message : "Unknown event stream error",
+        })
+      })
+  })
 }
 
 export async function handleTool(name: string, args: unknown): Promise<ToolResult> {
   switch (name) {
-    case "agentation_list_sessions": {
-      const sessions = await httpGet<Session[]>("/sessions");
+    case "agentation_v2_list_projects": {
+      const { projectFilter } = ListProjectsSchema.parse(args ?? {})
+      const sessions = await fetchSessions(projectFilter)
+      const projects = groupSessionsByProject(sessions)
       return success({
-        sessions: sessions.map((s) => ({
-          id: s.id,
-          url: s.url,
-          status: s.status,
-          createdAt: s.createdAt,
-        })),
-      });
+        count: projects.length,
+        projects,
+      })
     }
 
-    case "agentation_get_session": {
-      const { sessionId } = GetSessionSchema.parse(args);
+    case "agentation_v2_get_session": {
+      const { sessionId } = GetSessionSchema.parse(args)
       try {
-        const session = await httpGet<SessionWithAnnotations>(`/sessions/${sessionId}`);
-        return success(session);
+        const session = await fetchSession(sessionId)
+        return success({
+          session: summarizeSession(session),
+          annotations: session.annotations.map(summarizeAnnotation),
+        })
       } catch (err) {
         if ((err as Error).message.includes("404")) {
-          return error(`Session not found: ${sessionId}`);
+          return error(`Session not found: ${sessionId}`)
         }
-        throw err;
+        throw err
       }
     }
 
-    case "agentation_get_pending": {
-      const { sessionId } = GetPendingSchema.parse(args);
-      const response = await httpGet<PendingResponse>(`/sessions/${sessionId}/pending`);
+    case "agentation_v2_get_pending": {
+      const parsed = GetPendingSchema.parse(args ?? {})
+      const scope = await resolvePendingScope(parsed)
+      if (!scope.ok) {
+        return scope.response
+      }
+
+      const pending = await fetchPending({
+        sessionId: parsed.sessionId,
+        projectFilter: parsed.sessionId ? undefined : scope.projectFilter,
+      })
+
       return success({
-        count: response.count,
-        annotations: response.annotations.map((a) => ({
-          id: a.id,
-          comment: a.comment,
-          element: a.element,
-          elementPath: a.elementPath,
-          url: a.url,
-          intent: a.intent,
-          severity: a.severity,
-          timestamp: a.timestamp,
-          nearbyText: a.nearbyText,
-          reactComponents: a.reactComponents,
+        count: pending.count,
+        scopedSessions: scope.sessions.map((session) => ({
+          id: session.id,
+          projectKey: inferProjectKey(session),
+          url: session.url,
         })),
-      });
+        annotations: pending.annotations.map(summarizeAnnotation),
+      })
     }
 
-    case "agentation_get_all_pending": {
-      const response = await httpGet<PendingResponse>("/pending");
-      return success({
-        count: response.count,
-        annotations: response.annotations.map((a) => ({
-          id: a.id,
-          comment: a.comment,
-          element: a.element,
-          elementPath: a.elementPath,
-          url: a.url,
-          intent: a.intent,
-          severity: a.severity,
-          timestamp: a.timestamp,
-          nearbyText: a.nearbyText,
-          reactComponents: a.reactComponents,
-        })),
-      });
-    }
-
-    case "agentation_acknowledge": {
-      const { annotationId } = AcknowledgeSchema.parse(args);
+    case "agentation_v2_acknowledge": {
+      const { annotationId } = StatusSchema.parse(args)
       try {
-        await httpPatch(`/annotations/${annotationId}`, { status: "acknowledged" });
-        return success({ acknowledged: true, annotationId });
+        const annotation = await httpPatch<AnnotationV2>(`/v2/annotations/${annotationId}`, {
+          status: "acknowledged" satisfies AnnotationStatus,
+        })
+        return success({
+          acknowledged: true,
+          annotation: summarizeAnnotation(annotation),
+        })
       } catch (err) {
         if ((err as Error).message.includes("404")) {
-          return error(`Annotation not found: ${annotationId}`);
+          return error(`Annotation not found: ${annotationId}`)
         }
-        throw err;
+        throw err
       }
     }
 
-    case "agentation_resolve": {
-      const { annotationId, summary } = ResolveSchema.parse(args);
+    case "agentation_v2_resolve": {
+      const { annotationId, summary } = ResolveSchema.parse(args)
       try {
-        await httpPatch(`/annotations/${annotationId}`, {
-          status: "resolved",
+        const annotation = await httpPatch<AnnotationV2>(`/v2/annotations/${annotationId}`, {
+          status: "resolved" satisfies AnnotationStatus,
           resolvedBy: "agent",
-        });
-        if (summary) {
-          await httpPost(`/annotations/${annotationId}/thread`, {
+        })
+        if (summary?.trim()) {
+          await httpPost(`/v2/annotations/${annotationId}/thread`, {
             role: "agent",
-            content: `Resolved: ${summary}`,
-          });
+            content: summary.trim(),
+          })
         }
-        return success({ resolved: true, annotationId, summary });
+        return success({
+          resolved: true,
+          annotation: summarizeAnnotation(annotation),
+          summary: summary ?? null,
+        })
       } catch (err) {
         if ((err as Error).message.includes("404")) {
-          return error(`Annotation not found: ${annotationId}`);
+          return error(`Annotation not found: ${annotationId}`)
         }
-        throw err;
+        throw err
       }
     }
 
-    case "agentation_dismiss": {
-      const { annotationId, reason } = DismissSchema.parse(args);
+    case "agentation_v2_dismiss": {
+      const { annotationId, reason } = DismissSchema.parse(args)
       try {
-        await httpPatch(`/annotations/${annotationId}`, {
-          status: "dismissed",
+        const annotation = await httpPatch<AnnotationV2>(`/v2/annotations/${annotationId}`, {
+          status: "dismissed" satisfies AnnotationStatus,
           resolvedBy: "agent",
-        });
-        await httpPost(`/annotations/${annotationId}/thread`, {
+        })
+        await httpPost(`/v2/annotations/${annotationId}/thread`, {
           role: "agent",
-          content: `Dismissed: ${reason}`,
-        });
-        return success({ dismissed: true, annotationId, reason });
+          content: reason.trim(),
+        })
+        return success({
+          dismissed: true,
+          annotation: summarizeAnnotation(annotation),
+          reason,
+        })
       } catch (err) {
         if ((err as Error).message.includes("404")) {
-          return error(`Annotation not found: ${annotationId}`);
+          return error(`Annotation not found: ${annotationId}`)
         }
-        throw err;
+        throw err
       }
     }
 
-    case "agentation_reply": {
-      const { annotationId, message } = ReplySchema.parse(args);
+    case "agentation_v2_reply": {
+      const { annotationId, message } = ReplySchema.parse(args)
       try {
-        await httpPost(`/annotations/${annotationId}/thread`, {
+        const annotation = await httpPost<AnnotationV2>(`/v2/annotations/${annotationId}/thread`, {
           role: "agent",
-          content: message,
-        });
-        return success({ replied: true, annotationId, message });
+          content: message.trim(),
+        })
+        return success({
+          replied: true,
+          annotation: summarizeAnnotation(annotation),
+          message,
+        })
       } catch (err) {
         if ((err as Error).message.includes("404")) {
-          return error(`Annotation not found: ${annotationId}`);
+          return error(`Annotation not found: ${annotationId}`)
         }
-        throw err;
+        throw err
       }
     }
 
-    case "agentation_watch_annotations": {
-      const parsed = WatchAnnotationsSchema.parse(args);
-      const sessionId = parsed.sessionId;
-      const batchWindowSeconds = Math.min(60, Math.max(1, parsed.batchWindowSeconds ?? 10));
-      const timeoutSeconds = Math.min(300, Math.max(1, parsed.timeoutSeconds ?? 120));
+    case "agentation_v2_watch_annotations": {
+      const parsed = WatchSchema.parse(args ?? {})
+      const batchWindowSeconds = Math.min(30, Math.max(1, parsed.batchWindowSeconds ?? 5))
+      const timeoutSeconds = Math.min(300, Math.max(1, parsed.timeoutSeconds ?? 120))
 
-      // Drain: return any pending annotations immediately before blocking on SSE.
-      // This catches annotations that arrived while the caller was busy processing
-      // the previous batch (when watch_annotations wasn't running).
-      try {
-        const pendingPath = sessionId ? `/sessions/${sessionId}/pending` : "/pending";
-        const pending = await httpGet<PendingResponse>(pendingPath);
-        if (pending.count > 0) {
-          const sessions = [...new Set(pending.annotations.map((a) => a.sessionId))];
-          return success({
-            timeout: false,
-            count: pending.count,
-            sessions,
-            annotations: pending.annotations.map((a) => ({
-              id: a.id,
-              comment: a.comment,
-              element: a.element,
-              elementPath: a.elementPath,
-              url: a.url,
-              intent: a.intent,
-              severity: a.severity,
-              timestamp: a.timestamp,
-              nearbyText: a.nearbyText,
-              reactComponents: a.reactComponents,
-            })),
-          });
-        }
-      } catch (err) {
-        console.error("[MCP] Pending drain failed, falling through to SSE watch:", err);
+      const scope = await resolvePendingScope(parsed)
+      if (!scope.ok) {
+        return scope.response
+      }
+
+      const pending = await fetchPending({
+        sessionId: parsed.sessionId,
+        projectFilter: parsed.sessionId ? undefined : scope.projectFilter,
+      })
+
+      if (pending.count > 0) {
+        return success({
+          timeout: false,
+          count: pending.count,
+          scopedSessions: scope.sessions.map((session) => ({
+            id: session.id,
+            projectKey: inferProjectKey(session),
+            url: session.url,
+          })),
+          annotations: pending.annotations.map(summarizeAnnotation),
+        })
       }
 
       const result = await watchForAnnotations(
-        sessionId,
+        {
+          sessionId: parsed.sessionId,
+          projectFilter: parsed.sessionId ? undefined : scope.projectFilter,
+        },
         batchWindowSeconds * 1000,
-        timeoutSeconds * 1000
-      );
+        timeoutSeconds * 1000,
+      )
 
       switch (result.type) {
         case "annotations":
           return success({
             timeout: false,
             count: result.annotations.length,
-            sessions: result.sessions,
-            annotations: result.annotations.map((a) => ({
-              id: a.id,
-              comment: a.comment,
-              element: a.element,
-              elementPath: a.elementPath,
-              url: a.url,
-              intent: a.intent,
-              severity: a.severity,
-              timestamp: a.timestamp,
-              nearbyText: a.nearbyText,
-              reactComponents: a.reactComponents,
-            })),
-          });
+            sessionIds: result.sessionIds,
+            annotations: result.annotations.map(summarizeAnnotation),
+          })
         case "timeout":
           return success({
             timeout: true,
             message: `No new annotations within ${timeoutSeconds} seconds`,
-          });
+          })
         case "error":
-          return error(result.message);
+          return error(result.message)
       }
     }
 
+    case "agentation_v2_delete_project_annotations": {
+      const { projectFilter, confirm } = DeleteProjectSchema.parse(args)
+      const sessions = await fetchSessions(projectFilter)
+      const grouped = groupSessionsByProject(sessions)
+
+      if (sessions.length === 0) {
+        return error(`No sessions matched projectFilter "${projectFilter}"`)
+      }
+
+      const sessionDetails = await Promise.all(sessions.map((session) => fetchSession(session.id)))
+      const annotations = sessionDetails.flatMap((session) => session.annotations)
+
+      if (!confirm) {
+        return success({
+          confirmRequired: true,
+          projectFilter,
+          projectGroups: grouped,
+          sessionCount: sessionDetails.length,
+          annotationCount: annotations.length,
+          preview: annotations.slice(0, 20).map(summarizeAnnotation),
+        })
+      }
+
+      for (const annotation of annotations) {
+        await httpDelete(`/v2/annotations/${annotation.id}`)
+      }
+
+      return success({
+        deleted: true,
+        projectFilter,
+        sessionCount: sessionDetails.length,
+        annotationCount: annotations.length,
+      })
+    }
+
     default:
-      return error(`Unknown tool: ${name}`);
+      return error(`Unknown tool: ${name}`)
   }
 }
 
-// -----------------------------------------------------------------------------
-// Server
-// -----------------------------------------------------------------------------
-
-/**
- * Create and start the MCP server on stdio.
- * @param baseUrl - Optional HTTP server URL to fetch from (default: http://localhost:4747)
- */
-export async function startMcpServer(baseUrl?: string): Promise<void> {
-  if (baseUrl) {
-    setHttpBaseUrl(baseUrl);
-  }
-
+function createToolServer(): Server {
   const server = new Server(
     {
-      name: "agentation",
+      name: "agentation-v2",
       version: "0.0.1",
     },
     {
       capabilities: {
         tools: {},
       },
-    }
-  );
+    },
+  )
 
-  // List available tools
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return { tools: TOOLS };
-  });
-
-  // Handle tool calls
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS as any }))
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
     try {
-      return await handleTool(name, args);
+      return await handleTool(request.params.name, request.params.arguments)
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      return error(message);
+      const message = err instanceof Error ? err.message : "Unknown error"
+      return error(message)
     }
-  });
+  })
 
-  // Connect via stdio
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  return server
+}
 
-  // Log startup message with connection details
-  const isRemote = httpBaseUrl.startsWith("https://") || (!httpBaseUrl.includes("localhost") && !httpBaseUrl.includes("127.0.0.1"));
-  if (isRemote && apiKey) {
-    console.error(`[MCP] Agentation MCP server started on stdio (Remote: ${httpBaseUrl}, API key: configured)`);
-  } else if (isRemote) {
-    console.error(`[MCP] Agentation MCP server started on stdio (Remote: ${httpBaseUrl}, API key: not configured)`);
-  } else {
-    console.error(`[MCP] Agentation MCP server started on stdio (HTTP: ${httpBaseUrl})`);
+export async function startMcpServer(baseUrl?: string): Promise<void> {
+  if (baseUrl) {
+    setHttpBaseUrl(baseUrl)
   }
+
+  const server = createToolServer()
+  const transport = new StdioServerTransport()
+  await server.connect(transport)
+  console.error(`[MCP] Agentation V2 stdio server connected (API: ${httpBaseUrl})`)
+}
+
+const streamableTransports = new Map<string, StreamableHTTPServerTransport>()
+const sseTransports = new Map<string, SSEServerTransport>()
+
+function handleCors(res: ServerResponse): void {
+  res.writeHead(204, {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Accept, Mcp-Session-Id",
+    "Access-Control-Expose-Headers": "Mcp-Session-Id",
+    "Access-Control-Max-Age": "86400",
+  })
+  res.end()
+}
+
+function createStreamableSession(): {
+  server: Server
+  transport: StreamableHTTPServerTransport
+} {
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+  })
+  const server = createToolServer()
+  server.connect(transport)
+  return { server, transport }
+}
+
+async function handleStreamableHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const method = req.method || "GET"
+  const sessionId = req.headers["mcp-session-id"] as string | undefined
+
+  res.setHeader("Access-Control-Allow-Origin", "*")
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id")
+  res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id")
+
+  if (method === "POST") {
+    let transport: StreamableHTTPServerTransport
+
+    if (sessionId) {
+      if (!streamableTransports.has(sessionId)) {
+        res.writeHead(404, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "Session not found. Please re-initialize." },
+          id: null,
+        }))
+        return
+      }
+
+      transport = streamableTransports.get(sessionId)!
+    } else {
+      const { transport: newTransport } = createStreamableSession()
+      transport = newTransport
+    }
+
+    try {
+      const body = await new Promise<string>((resolve, reject) => {
+        let data = ""
+        req.on("data", (chunk) => {
+          data += chunk
+        })
+        req.on("end", () => resolve(data))
+        req.on("error", reject)
+      })
+
+      const parsedBody = body ? JSON.parse(body) : undefined
+      await transport.handleRequest(req, res, parsedBody)
+
+      const newSessionId = transport.sessionId
+      if (newSessionId && !streamableTransports.has(newSessionId)) {
+        streamableTransports.set(newSessionId, transport)
+        console.error(`[MCP] Streamable HTTP session created: ${newSessionId}`)
+      }
+    } catch (err) {
+      console.error("[MCP] Streamable HTTP request error:", err)
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: "Internal server error" }))
+      }
+    }
+    return
+  }
+
+  if (method === "GET") {
+    if (!sessionId || !streamableTransports.has(sessionId)) {
+      res.writeHead(400, { "Content-Type": "application/json" })
+      res.end(JSON.stringify({ error: "Missing or invalid Mcp-Session-Id" }))
+      return
+    }
+
+    const transport = streamableTransports.get(sessionId)!
+    try {
+      await transport.handleRequest(req, res)
+    } catch (err) {
+      console.error("[MCP] Streamable HTTP SSE error:", err)
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: "Internal server error" }))
+      }
+    }
+    return
+  }
+
+  if (method === "DELETE") {
+    if (!sessionId || !streamableTransports.has(sessionId)) {
+      res.writeHead(404, { "Content-Type": "application/json" })
+      res.end(JSON.stringify({ error: "Session not found" }))
+      return
+    }
+
+    const transport = streamableTransports.get(sessionId)!
+    await transport.close()
+    streamableTransports.delete(sessionId)
+    res.writeHead(204)
+    res.end()
+    return
+  }
+
+  res.writeHead(405, { "Content-Type": "application/json" })
+  res.end(JSON.stringify({ error: "Method not allowed" }))
+}
+
+async function handleLegacySse(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const method = req.method || "GET"
+  const url = new URL(req.url || "/", "http://localhost")
+
+  if (method === "GET") {
+    const transport = new SSEServerTransport("/messages", res)
+    const server = createToolServer()
+    await server.connect(transport)
+
+    const sessionId = transport.sessionId
+    sseTransports.set(sessionId, transport)
+    transport.onclose = () => {
+      sseTransports.delete(sessionId)
+    }
+
+    console.error(`[MCP] SSE session created: ${sessionId}`)
+    return
+  }
+
+  if (method === "POST") {
+    const sessionId = url.searchParams.get("sessionId")
+    if (!sessionId || !sseTransports.has(sessionId)) {
+      res.writeHead(404, { "Content-Type": "application/json" })
+      res.end(JSON.stringify({ error: "SSE session not found" }))
+      return
+    }
+
+    const transport = sseTransports.get(sessionId)!
+    let parsedBody: unknown
+
+    try {
+      const body = await new Promise<string>((resolve, reject) => {
+        let data = ""
+        req.on("data", (chunk) => {
+          data += chunk
+        })
+        req.on("end", () => resolve(data))
+        req.on("error", reject)
+      })
+      parsedBody = body ? JSON.parse(body) : undefined
+    } catch {
+      parsedBody = undefined
+    }
+
+    await transport.handlePostMessage(req, res, parsedBody)
+    return
+  }
+
+  res.writeHead(405, { "Content-Type": "application/json" })
+  res.end(JSON.stringify({ error: "Method not allowed" }))
+}
+
+export function startMcpHttpServer(port: number, baseUrl?: string): void {
+  if (baseUrl) {
+    setHttpBaseUrl(baseUrl)
+  }
+
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url || "/", `http://localhost:${port}`)
+    const pathname = url.pathname
+    const method = req.method || "GET"
+
+    if (method === "OPTIONS") {
+      return handleCors(res)
+    }
+
+    if (pathname === "/health" && method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" })
+      res.end(JSON.stringify({
+        status: "ok",
+        transport: {
+          streamableHttp: `${url.origin}/mcp`,
+          sse: `${url.origin}/sse`,
+        },
+        apiBaseUrl: httpBaseUrl,
+      }))
+      return
+    }
+
+    if (pathname === "/mcp") {
+      return handleStreamableHttp(req, res)
+    }
+
+    if (pathname === "/sse" || pathname === "/messages") {
+      return handleLegacySse(req, res)
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" })
+    res.end(JSON.stringify({ error: "Not found" }))
+  })
+
+  server.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EADDRINUSE") {
+      console.error(`[MCP] Port ${port} already in use — reusing existing MCP transport server`)
+      return
+    }
+
+    console.error("[MCP] HTTP transport server error:", error.message)
+  })
+
+  server.listen(port, () => {
+    console.error(
+      `[MCP] Agentation V2 transport listening on http://localhost:${port} (/mcp, /sse) -> API ${httpBaseUrl}`,
+    )
+  })
 }

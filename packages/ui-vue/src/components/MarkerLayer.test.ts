@@ -38,6 +38,8 @@ function makeProvides(annotations: any[] = []) {
     annotationColor: "#3c82f7",
     showMarkers: true,
     copyFormat: "markdown",
+    copyPrefix: "",
+    copyExcludeFields: [],
     autoClearAfterCopy: false,
     blockInteractions: true,
     locale: "en",
@@ -258,5 +260,68 @@ describe("MarkerLayer", () => {
     })
 
     expect(wrapper.findAll(".marker-dot")).toHaveLength(0)
+  })
+
+  it("shows workflow status and reply count in the marker tooltip", async () => {
+    const button = document.createElement("button")
+    button.id = "marker-status"
+    button.textContent = "Deploy"
+    button.getBoundingClientRect = vi.fn(() => new DOMRect(40, 60, 100, 36))
+    document.body.appendChild(button)
+
+    const annotations = [
+      {
+        id: "a1",
+        schemaVersion: 1,
+        timestamp: new Date().toISOString(),
+        url: "http://localhost/",
+        elementSelector: "button",
+        elementText: "Deploy",
+        comment: "Confirm final state",
+        status: "resolved",
+        thread: [
+          {
+            id: "t1",
+            role: "agent",
+            content: "Completed the last spacing fix.",
+            timestamp: "2026-03-09T01:02:03.000Z",
+          },
+          {
+            id: "t2",
+            role: "agent",
+            content: "Verified in the browser.",
+            timestamp: "2026-03-09T01:03:03.000Z",
+          },
+        ],
+        source: { framework: "vue", componentName: "App", file: "f", resolver: "r" },
+        metadata: {
+          boundingBox: { x: 40, y: 60, width: 100, height: 36 },
+          elementLocator: {
+            selector: "#marker-status",
+            tag: "button",
+            text: "Deploy",
+            position: { x: 40, y: 60, width: 100, height: 36 },
+          },
+        },
+      },
+    ]
+
+    const { store, overlay, settings, i18n } = makeProvides(annotations)
+
+    const wrapper = mount(MarkerLayer, {
+      global: {
+        provide: {
+          [ANNOTATIONS_STORE_KEY as symbol]: store,
+          [OVERLAY_KEY as symbol]: overlay,
+          [SETTINGS_KEY as symbol]: settings,
+          [I18N_KEY as symbol]: i18n,
+        },
+      },
+    })
+
+    await wrapper.find(".marker-dot").trigger("mouseenter")
+
+    expect(wrapper.find(".tooltip-status").text()).toContain("Resolved")
+    expect(wrapper.find(".tooltip-thread").text()).toContain("2 replies")
   })
 })

@@ -19,7 +19,7 @@ pnpm add agentation-vue-mcp
 The fastest way to configure Agentation across any supported agent:
 
 ```bash
-npx add-mcp "npx -y agentation-vue-mcp server"
+npx add-mcp "npx -y agentation-vue-mcp server --port 4747 --mcp-port 4748"
 ```
 
 Uses [add-mcp](https://github.com/neondatabase/add-mcp) to auto-detect installed agents (Claude Code, Cursor, Codex, Windsurf, and more).
@@ -27,19 +27,20 @@ Uses [add-mcp](https://github.com/neondatabase/add-mcp) to auto-detect installed
 Or for Claude Code specifically:
 
 ```bash
-claude mcp add agentation -- npx agentation-vue-mcp server
+claude mcp add agentation -- npx agentation-vue-mcp server --port 4747 --mcp-port 4748
 ```
 
 
 ### 2. Start the server
 
 ```bash
-agentation-vue-mcp server
+agentation-vue-mcp server --port 4747 --mcp-port 4748
 ```
 
 This starts both:
-- **HTTP server** (port 4747) - receives annotations from the browser toolbar
-- **MCP server** (stdio) - exposes tools for Claude Code
+- **Browser sync API** (port 4747) - receives annotations from the Vue plugin
+- **MCP transport server** (port 4748) - exposes `/mcp` and `/sse`
+- **MCP stdio server** - enabled by default for Claude Code and other stdio clients
 
 ### 3. Verify your setup
 
@@ -59,9 +60,11 @@ agentation-vue-mcp help                    # Show help
 ### Server Options
 
 ```bash
---port <port>      # HTTP server port (default: 4747)
---mcp-only         # Skip HTTP server, only run MCP on stdio
---http-url <url>   # HTTP server URL for MCP to fetch from
+--port <port>      # Browser sync API port (default: 4747)
+--mcp-port <port>  # MCP transport port for /mcp and /sse (default: 4748)
+--mcp-only         # Skip browser API server and only expose MCP transports
+--http-url <url>   # Browser API base URL for MCP tools to fetch from
+--no-stdio         # Disable stdio MCP transport and only expose network transports
 ```
 
 ## MCP Tools
@@ -70,36 +73,48 @@ The MCP server exposes these tools to AI agents:
 
 | Tool | Description |
 |------|-------------|
-| `agentation_list_sessions` | List all active annotation sessions |
-| `agentation_get_session` | Get a session with all its annotations |
-| `agentation_get_pending` | Get pending annotations for a session |
-| `agentation_get_all_pending` | Get pending annotations across all sessions |
-| `agentation_acknowledge` | Mark an annotation as acknowledged |
-| `agentation_resolve` | Mark an annotation as resolved |
-| `agentation_dismiss` | Dismiss an annotation with a reason |
-| `agentation_reply` | Add a reply to an annotation thread |
-| `agentation_watch_annotations` | Block until new annotations appear, then return batch |
+| `agentation_v2_list_projects` | Group tracked sessions by project for shared-server workflows |
+| `agentation_v2_get_session` | Inspect one session with workflow fields and agent context |
+| `agentation_v2_get_pending` | Read pending annotations, scoped by `sessionId` or `projectFilter` |
+| `agentation_v2_acknowledge` | Mark an annotation as acknowledged |
+| `agentation_v2_resolve` | Resolve an annotation and optionally append an agent summary |
+| `agentation_v2_dismiss` | Dismiss an annotation and record the reason in the thread |
+| `agentation_v2_reply` | Add an agent reply without changing workflow status |
+| `agentation_v2_watch_annotations` | Wait for scoped pending annotations in shared-server mode |
+| `agentation_v2_delete_project_annotations` | Preview or delete one project's annotations with explicit confirmation |
+
+Shared-server safety rules:
+
+- Sessions are grouped by explicit `projectId` when present, otherwise by inferred origin/path prefix.
+- `agentation_v2_get_pending` and `agentation_v2_watch_annotations` require explicit scope when multiple projects share the server.
+- `agentation_v2_delete_project_annotations` is preview-first and requires `confirm: true`.
 
 ## HTTP API
 
-The HTTP server provides a REST API for the browser toolbar:
+The browser sync API provides a V2 REST API for the Vue toolbar and runtime:
 
 ### Sessions
-- `POST /sessions` - Create a new session
-- `GET /sessions` - List all sessions
-- `GET /sessions/:id` - Get session with annotations
+- `POST /v2/sessions` - Create a new session
+- `GET /v2/sessions` - List sessions, optionally `?projectFilter=...`
+- `GET /v2/sessions/:id` - Get one session with annotations
 
 ### Annotations
-- `POST /sessions/:id/annotations` - Add annotation
-- `GET /annotations/:id` - Get annotation
-- `PATCH /annotations/:id` - Update annotation
-- `DELETE /annotations/:id` - Delete annotation
-- `GET /sessions/:id/pending` - Get pending annotations
-- `GET /pending` - Get all pending annotations
+- `POST /v2/sessions/:id/annotations` - Add annotation
+- `GET /v2/annotations/:id` - Get annotation
+- `PATCH /v2/annotations/:id` - Update annotation fields or workflow status
+- `DELETE /v2/annotations/:id` - Delete annotation
+- `POST /v2/annotations/:id/thread` - Append a thread message
+- `GET /v2/sessions/:id/pending` - Get pending annotations for one session
+- `GET /v2/pending` - Get scoped pending annotations across sessions
 
 ### Events (SSE)
-- `GET /sessions/:id/events` - Session event stream
-- `GET /events` - Global event stream (optionally filter with `?domain=...`)
+- `GET /v2/sessions/:id/events` - Session event stream with replay support
+- `GET /v2/events` - Global event stream, optionally `?projectFilter=...`
+
+### MCP Transports
+
+- `GET/POST/DELETE /mcp` - Streamable HTTP MCP transport
+- `GET /sse` and `POST /messages?sessionId=...` - Legacy SSE MCP transport
 
 ### Health
 - `GET /health` - Health check
@@ -107,20 +122,21 @@ The HTTP server provides a REST API for the browser toolbar:
 
 ## Hands-Free Mode
 
-Use `agentation_watch_annotations` in a loop for automatic feedback processing -- the agent picks up new annotations as they're created:
+Use `agentation_v2_watch_annotations` in a loop for automatic feedback processing:
 
-1. Agent calls `agentation_watch_annotations` (blocks until annotations appear)
-2. Annotations arrive -- agent receives batch after collection window
+1. Agent calls `agentation_v2_watch_annotations` with a `projectFilter` or `sessionId`
+2. Pending annotations arrive and are returned as a scoped batch
 3. Agent processes each annotation:
-   - `agentation_acknowledge` -- mark as seen
+   - `agentation_v2_acknowledge` -- mark as seen
    - Make code changes
-   - `agentation_resolve` -- mark as done with summary
-4. Agent calls `agentation_watch_annotations` again (loop)
+   - `agentation_v2_resolve` -- mark as done with summary
+4. Agent calls `agentation_v2_watch_annotations` again (loop)
 
 Example CLAUDE.md instructions:
 
 ```markdown
-When I say "watch mode", call agentation_watch_annotations in a loop.
+When I say "watch mode", call agentation_v2_watch_annotations in a loop.
+Scope the read with projectFilter unless I gave you a sessionId.
 For each annotation: acknowledge it, make the fix, then resolve it with a summary.
 Continue watching until I say stop or timeout is reached.
 ```
@@ -149,13 +165,16 @@ export AGENTATION_WEBHOOKS=https://server1.com/hook,https://server2.com/hook
 ## Programmatic Usage
 
 ```typescript
-import { startHttpServer, startMcpServer } from 'agentation-vue-mcp';
+import { startHttpServer, startMcpHttpServer, startMcpServer } from "agentation-vue-mcp"
 
-// Start HTTP server on port 4747
-startHttpServer(4747);
+// Start browser sync API on port 4747
+startHttpServer(4747)
 
-// Start MCP server (connects via stdio)
-await startMcpServer('http://localhost:4747');
+// Start MCP HTTP transports on port 4748
+startMcpHttpServer(4748, "http://localhost:4747")
+
+// Start MCP stdio transport
+await startMcpServer("http://localhost:4747")
 ```
 
 ## Storage

@@ -1,6 +1,12 @@
+import { spawn } from "node:child_process"
 import type { Plugin } from "vite"
 import VueTracer from "vite-plugin-vue-tracer"
-import { resolveOptions, type AgentationVueOptions } from "./types.js"
+import {
+  resolveMcpEndpoint,
+  resolveOptions,
+  type AgentationVueOptions,
+  type AgentationVueSyncOptions,
+} from "./types.js"
 import {
   INIT_SCRIPT_PATH,
   createInitModuleSource,
@@ -44,6 +50,131 @@ function printBanner(options: AgentationVueOptions): void {
 function logTerm(message: string, detail?: string): void {
   const d = detail ? ` ${c.dim}(${detail})${c.reset}` : ""
   console.log(`  ${PREFIX} ${c.green}${message}${c.reset}${d}`)
+}
+
+const ensuredSharedServers = new Map<string, Promise<void>>()
+
+function normalizeUrl(input: string): string {
+  return input.replace(/\/+$/, "")
+}
+
+function parsePort(input: string): number | null {
+  try {
+    const url = new URL(input)
+    const fallback = url.protocol === "https:" ? 443 : 80
+    const port = parseInt(url.port || String(fallback), 10)
+    return Number.isFinite(port) ? port : null
+  } catch {
+    return null
+  }
+}
+
+async function isServerHealthy(baseUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${normalizeUrl(baseUrl)}/health`, {
+      signal: AbortSignal.timeout(800),
+    })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+async function waitForSharedServer(
+  apiEndpoint: string,
+  mcpEndpoint: string | undefined,
+  timeoutMs = 8000,
+): Promise<boolean> {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    const [apiHealthy, mcpHealthy] = await Promise.all([
+      isServerHealthy(apiEndpoint),
+      mcpEndpoint ? isServerHealthy(mcpEndpoint) : Promise.resolve(true),
+    ])
+
+    if (apiHealthy && mcpHealthy) {
+      return true
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 350))
+  }
+
+  return false
+}
+
+function ensureSharedMcpServer(sync: AgentationVueSyncOptions): Promise<void> {
+  if (sync.ensureServer === false) {
+    return Promise.resolve()
+  }
+
+  const apiEndpoint = normalizeUrl(sync.endpoint)
+  const mcpEndpoint = resolveMcpEndpoint(sync)
+  const key = `${apiEndpoint}|${mcpEndpoint ?? "none"}`
+  const existing = ensuredSharedServers.get(key)
+  if (existing) {
+    return existing
+  }
+
+  const promise = (async () => {
+    const [apiHealthy, mcpHealthy] = await Promise.all([
+      isServerHealthy(apiEndpoint),
+      mcpEndpoint ? isServerHealthy(mcpEndpoint) : Promise.resolve(true),
+    ])
+
+    if (apiHealthy && mcpHealthy) {
+      logTerm("reusing shared MCP server ♻️", `${apiEndpoint}${mcpEndpoint ? ` + ${mcpEndpoint}` : ""}`)
+      return
+    }
+
+    const apiPort = parsePort(apiEndpoint)
+    const mcpPort = mcpEndpoint ? parsePort(mcpEndpoint) : null
+
+    if (apiPort == null || mcpPort == null) {
+      logTerm(
+        "shared MCP auto-start skipped ⚠️",
+        "sync.endpoint and sync.mcpEndpoint must include explicit ports",
+      )
+      return
+    }
+
+    const command = process.platform === "win32" ? "npx.cmd" : "npx"
+    const child = spawn(
+      command,
+      [
+        "agentation-vue-mcp",
+        "server",
+        "--port",
+        String(apiPort),
+        "--mcp-port",
+        String(mcpPort),
+        "--no-stdio",
+      ],
+      {
+        detached: true,
+        stdio: "ignore",
+        env: process.env,
+      },
+    )
+
+    child.on("error", (error) => {
+      console.warn("[agentation] Failed to spawn shared MCP server:", error.message)
+    })
+    child.unref()
+
+    const ready = await waitForSharedServer(apiEndpoint, mcpEndpoint)
+    if (ready) {
+      logTerm("shared MCP server ready ✅", `${apiEndpoint}${mcpEndpoint ? ` + ${mcpEndpoint}` : ""}`)
+      return
+    }
+
+    logTerm(
+      "shared MCP server still starting ⏳",
+      "health checks not ready yet; if this persists, start agentation-vue-mcp server manually",
+    )
+  })()
+
+  ensuredSharedServers.set(key, promise)
+  return promise
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +236,11 @@ function createShellPlugin(options: AgentationVueOptions): Plugin {
       )
     },
 
-    configureServer(server) {
+    async configureServer(server) {
+      if (resolved.enabled && resolved.sync) {
+        await ensureSharedMcpServer(resolved.sync)
+      }
+
       server.middlewares.use((req, res, next) => {
         if (!resolved.enabled) return next()
 

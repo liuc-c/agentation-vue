@@ -72,6 +72,7 @@ onMounted(() => {
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 let unsubscribeNotifications: (() => void) | null = null
+let unsubscribeSync: (() => void) | null = null
 
 onMounted(() => {
   unsubscribeNotifications = props.bridge.subscribeNotifications?.((notification) => {
@@ -89,10 +90,33 @@ onMounted(() => {
       toastTimer = null
     }, notification.duration ?? 2600)
   }) ?? null
+
+  unsubscribeSync = props.bridge.sync?.subscribe((event) => {
+    if (event.type === "reconciled") {
+      props.store.hydrate()
+      if (event.source === "remote" && event.annotationCount !== undefined) {
+        props.bridge.notify?.({
+          kind: "info",
+          duration: 2200,
+          message: i18n.messages.notifications.remoteSyncUpdated(event.annotationCount),
+        })
+      }
+      return
+    }
+
+    if (event.type === "error" && event.message) {
+      props.bridge.notify?.({
+        kind: "warning",
+        duration: 2600,
+        message: i18n.messages.notifications.syncFailed(event.message),
+      })
+    }
+  }) ?? null
 })
 
 onUnmounted(() => {
   unsubscribeNotifications?.()
+  unsubscribeSync?.()
   if (toastTimer) {
     clearTimeout(toastTimer)
   }

@@ -37,22 +37,37 @@ The plugin automatically injects the annotation overlay in dev mode. It's disabl
 | `locale` | `"en" \| "zh-CN"` | `"en"` | Default UI locale |
 | `storagePrefix` | `string` | `"agentation-vue-"` | localStorage key prefix |
 | `outputDetail` | `"compact" \| "standard" \| "detailed" \| "forensic"` | `"standard"` | Level of detail in export output |
-| `sync` | `{ endpoint: string, autoSync?: boolean, debounceMs?: number } \| false` | `false` | MCP server sync configuration |
+| `sync` | `{ endpoint?: string, mcpEndpoint?: string, projectId?: string, autoSync?: boolean, debounceMs?: number, ensureServer?: boolean } \| false` | enabled in dev | Shared Agentation V2 sync + MCP workflow configuration |
 | `inspector` | `"tracer"` | `"tracer"` | Source resolution strategy |
 
 ## Sync Configuration
 
-To sync annotations to an MCP server:
+Sync is enabled by default during `vite dev`. To disable it entirely:
+
+```ts
+agentation({
+  sync: false,
+})
+```
+
+To customize the shared Agentation server endpoints:
 
 ```ts
 agentation({
   sync: {
     endpoint: "http://localhost:4747",
+    mcpEndpoint: "http://localhost:4748",
+    projectId: "demo-app",
     autoSync: true,     // default
     debounceMs: 400,    // default
+    ensureServer: true, // default
   },
 })
 ```
+
+When `ensureServer` is enabled, the plugin health-checks the configured ports,
+reuses an existing Agentation server if one is already running, and otherwise
+spawns `agentation-vue-mcp server --no-stdio` during `vite dev`.
 
 ## Nuxt Setup
 

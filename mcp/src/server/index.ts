@@ -17,22 +17,30 @@
  */
 
 import { startHttpServer } from "./http.js";
-import { startMcpServer, setApiKey } from "./mcp.js";
+import { startMcpHttpServer, startMcpServer, setApiKey } from "./mcp.js";
 
 // Re-export for programmatic use
 export { startHttpServer, setCloudApiKey } from "./http.js";
-export { startMcpServer, setApiKey } from "./mcp.js";
+export { startMcpHttpServer, startMcpServer, setApiKey } from "./mcp.js";
 export * from "./store.js";
 
 // -----------------------------------------------------------------------------
 // CLI Argument Parsing
 // -----------------------------------------------------------------------------
 
-function parseArgs(): { port: number; mcpOnly: boolean; httpUrl: string } {
+function parseArgs(): {
+  port: number
+  mcpPort: number
+  mcpOnly: boolean
+  httpUrl: string
+  noStdio: boolean
+} {
   const args = process.argv.slice(2);
   let port = 4747;
+  let mcpPort = 4748;
   let mcpOnly = false;
   let httpUrl = "http://localhost:4747";
+  let noStdio = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--port" && args[i + 1]) {
@@ -46,8 +54,18 @@ function parseArgs(): { port: number; mcpOnly: boolean; httpUrl: string } {
       }
       i++;
     }
+    if (args[i] === "--mcp-port" && args[i + 1]) {
+      const parsed = parseInt(args[i + 1], 10);
+      if (!isNaN(parsed) && parsed > 0 && parsed < 65536) {
+        mcpPort = parsed;
+      }
+      i++;
+    }
     if (args[i] === "--mcp-only") {
       mcpOnly = true;
+    }
+    if (args[i] === "--no-stdio") {
+      noStdio = true;
     }
     if (args[i] === "--http-url" && args[i + 1]) {
       httpUrl = args[i + 1];
@@ -55,7 +73,7 @@ function parseArgs(): { port: number; mcpOnly: boolean; httpUrl: string } {
     }
   }
 
-  return { port, mcpOnly, httpUrl };
+  return { port, mcpPort, mcpOnly, httpUrl, noStdio };
 }
 
 // -----------------------------------------------------------------------------
@@ -63,14 +81,18 @@ function parseArgs(): { port: number; mcpOnly: boolean; httpUrl: string } {
 // -----------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  const { port, mcpOnly, httpUrl } = parseArgs();
+  const { port, mcpPort, mcpOnly, httpUrl, noStdio } = parseArgs();
 
   // Start HTTP server (for browser clients) - skip if --mcp-only
   if (!mcpOnly) {
     startHttpServer(port);
   }
 
-  // Start MCP server (for Claude Code via stdio)
-  // MCP fetches from HTTP server (single source of truth)
-  await startMcpServer(httpUrl);
+  // Start MCP network transport (for remote/http MCP clients)
+  startMcpHttpServer(mcpPort, httpUrl);
+
+  // Start MCP stdio transport unless explicitly disabled.
+  if (!noStdio) {
+    await startMcpServer(httpUrl);
+  }
 }

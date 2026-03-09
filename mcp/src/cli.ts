@@ -235,12 +235,14 @@ if (command === "init") {
   });
 } else if (command === "server") {
   // Dynamic import to avoid loading server code for other commands
-  import("./server/index.js").then(({ startHttpServer, startMcpServer, setApiKey }) => {
+  import("./server/index.js").then(({ startHttpServer, startMcpHttpServer, startMcpServer, setApiKey }) => {
     const args = process.argv.slice(3);
     let port = 4747;
+    let mcpPort = 4748;
     let mcpOnly = false;
     let httpUrl = "http://localhost:4747";
     let apiKeyArg: string | undefined;
+    let noStdio = false;
 
     for (let i = 0; i < args.length; i++) {
       if (args[i] === "--port" && args[i + 1]) {
@@ -253,8 +255,18 @@ if (command === "init") {
         }
         i++;
       }
+      if (args[i] === "--mcp-port" && args[i + 1]) {
+        const parsed = parseInt(args[i + 1], 10);
+        if (!isNaN(parsed) && parsed > 0 && parsed < 65536) {
+          mcpPort = parsed;
+        }
+        i++;
+      }
       if (args[i] === "--mcp-only") {
         mcpOnly = true;
+      }
+      if (args[i] === "--no-stdio") {
+        noStdio = true;
       }
       if (args[i] === "--http-url" && args[i + 1]) {
         httpUrl = args[i + 1];
@@ -275,10 +287,13 @@ if (command === "init") {
     if (!mcpOnly) {
       startHttpServer(port, apiKey);
     }
-    startMcpServer(httpUrl).catch((err) => {
-      console.error("MCP server error:", err);
-      process.exit(1);
-    });
+    startMcpHttpServer(mcpPort, httpUrl);
+    if (!noStdio) {
+      startMcpServer(httpUrl).catch((err) => {
+        console.error("MCP server error:", err);
+        process.exit(1);
+      });
+    }
   });
 } else if (command === "help" || command === "--help" || command === "-h" || !command) {
   console.log(`
@@ -291,18 +306,21 @@ Usage:
   agentation-vue-mcp help                    Show this help message
 
 Server Options:
-  --port <port>      HTTP server port (default: 4747)
-  --mcp-only         Skip HTTP server, only run MCP on stdio
-  --http-url <url>   HTTP server URL for MCP to fetch from
+  --port <port>      Browser sync API port (default: 4747)
+  --mcp-port <port>  MCP transport port for /mcp and /sse (default: 4748)
+  --mcp-only         Skip browser API server and only expose MCP transports
+  --http-url <url>   Browser API base URL for MCP tools to fetch from
   --api-key <key>    API key for cloud storage (or set AGENTATION_API_KEY env var)
+  --no-stdio         Disable stdio MCP transport and only expose network transports
 
 Commands:
   init      Guided setup that configures Claude Code to use the MCP server.
             Registers the server via 'claude mcp add'.
 
-  server    Starts both an HTTP server and MCP server for collecting annotations.
-            The HTTP server receives annotations from the React component.
-            The MCP server exposes tools for Claude Code to read/act on annotations.
+  server    Starts the V2 browser API plus MCP transports.
+            Browser/plugin sync uses the API port.
+            MCP clients can connect over streamable HTTP (/mcp), SSE (/sse),
+            or stdio unless --no-stdio is passed.
 
   doctor    Runs diagnostic checks on your setup:
             - Node.js version
@@ -311,8 +329,9 @@ Commands:
 
 Examples:
   agentation-vue-mcp init                Set up Agentation MCP
-  agentation-vue-mcp server              Start server on default port 4747
-  agentation-vue-mcp server --port 8080  Start server on port 8080
+  agentation-vue-mcp server                                 Start API on 4747 and MCP on 4748
+  agentation-vue-mcp server --port 8080 --mcp-port 8081    Override both ports
+  agentation-vue-mcp server --no-stdio                      Network-only MCP transport
   agentation-vue-mcp doctor              Check if everything is configured correctly
 
   # Use cloud storage with API key (local server proxies to cloud)

@@ -10,6 +10,7 @@ import {
   getForensicComputedStyles,
   parseComputedStylesString,
   type AnnotationV2,
+  type AnnotationStatus,
 } from "@liuovo/agentation-vue-core"
 import {
   ANNOTATIONS_STORE_KEY,
@@ -92,6 +93,12 @@ const displaySource = computed(() => {
 const selectedText = computed(() => {
   return editingAnnotation.value?.elementText ?? snapshot.value?.selectedText ?? ""
 })
+const threadMessages = computed(() => editingAnnotation.value?.thread ?? [])
+const workflowStatus = computed<AnnotationStatus>(
+  () => editingAnnotation.value?.status ?? "pending",
+)
+const workflowStatusLabel = computed(() => getStatusLabel(workflowStatus.value))
+const workflowStatusTone = computed(() => getStatusTone(workflowStatus.value))
 
 const computedStyles = computed(() => {
   if (editingAnnotation.value) {
@@ -220,6 +227,53 @@ function onKeydown(event: KeyboardEvent): void {
   }
 }
 
+function getStatusLabel(status: AnnotationStatus): string {
+  switch (status) {
+    case "acknowledged":
+      return messages.value.workflow.statusAcknowledged
+    case "resolved":
+      return messages.value.workflow.statusResolved
+    case "dismissed":
+      return messages.value.workflow.statusDismissed
+    default:
+      return messages.value.workflow.statusPending
+  }
+}
+
+function getStatusTone(status: AnnotationStatus): "pending" | "acknowledged" | "resolved" | "dismissed" {
+  switch (status) {
+    case "acknowledged":
+    case "resolved":
+    case "dismissed":
+      return status
+    default:
+      return "pending"
+  }
+}
+
+function getRoleLabel(role: "human" | "agent"): string {
+  return role === "agent"
+    ? messages.value.workflow.roleAgent
+    : messages.value.workflow.roleHuman
+}
+
+function formatTimestamp(timestamp: string | number): string {
+  const date = typeof timestamp === "number"
+    ? new Date(timestamp)
+    : new Date(timestamp)
+
+  if (Number.isNaN(date.getTime())) {
+    return ""
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date)
+}
+
 function isMultiSelect(annotation: AnnotationV2 | null): boolean {
   const metadata = annotation?.metadata as { isMultiSelect?: unknown } | undefined
   return metadata?.isMultiSelect === true
@@ -286,6 +340,35 @@ function getAnnotationComputedStyles(annotation: AnnotationV2): Record<string, s
 
       <div v-if="displaySource" class="source-file">
         {{ displaySource }}
+      </div>
+
+      <div v-if="editingAnnotation" class="workflow-summary">
+        <div class="status-row">
+          <span class="status-pill" :data-status="workflowStatusTone">
+            {{ workflowStatusLabel }}
+          </span>
+          <span v-if="threadMessages.length" class="thread-count">
+            {{ messages.workflow.replyCount(threadMessages.length) }}
+          </span>
+        </div>
+
+        <div v-if="threadMessages.length" class="thread-block">
+          <div class="thread-title">{{ messages.workflow.thread }}</div>
+          <div class="thread-list">
+            <div
+              v-for="message in threadMessages.slice(-4)"
+              :key="message.id"
+              class="thread-item"
+              :data-role="message.role"
+            >
+              <div class="thread-meta">
+                <span>{{ getRoleLabel(message.role) }}</span>
+                <span>{{ formatTimestamp(message.timestamp) }}</span>
+              </div>
+              <div class="thread-content">{{ message.content }}</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div
@@ -474,6 +557,150 @@ function getAnnotationComputedStyles(annotation: AnnotationV2): Record<string, s
 
 .light .source-file {
   color: rgba(15, 23, 42, 0.42);
+}
+
+.workflow-summary {
+  margin-bottom: 8px;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.status-pill[data-status="pending"] {
+  background: rgba(59, 130, 246, 0.16);
+  color: #93c5fd;
+}
+
+.status-pill[data-status="acknowledged"] {
+  background: rgba(14, 165, 233, 0.16);
+  color: #67e8f9;
+}
+
+.status-pill[data-status="resolved"] {
+  background: rgba(34, 197, 94, 0.16);
+  color: #86efac;
+}
+
+.status-pill[data-status="dismissed"] {
+  background: rgba(148, 163, 184, 0.18);
+  color: #cbd5e1;
+}
+
+.light .status-pill[data-status="pending"] {
+  background: rgba(59, 130, 246, 0.1);
+  color: #1d4ed8;
+}
+
+.light .status-pill[data-status="acknowledged"] {
+  background: rgba(14, 165, 233, 0.1);
+  color: #0f766e;
+}
+
+.light .status-pill[data-status="resolved"] {
+  background: rgba(34, 197, 94, 0.1);
+  color: #15803d;
+}
+
+.light .status-pill[data-status="dismissed"] {
+  background: rgba(148, 163, 184, 0.14);
+  color: #475569;
+}
+
+.thread-count {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.46);
+}
+
+.light .thread-count {
+  color: rgba(15, 23, 42, 0.44);
+}
+
+.thread-block {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.light .thread-block {
+  background: rgba(15, 23, 42, 0.04);
+}
+
+.thread-title {
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.light .thread-title {
+  color: rgba(15, 23, 42, 0.58);
+}
+
+.thread-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 144px;
+  overflow: auto;
+}
+
+.thread-item {
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.24);
+}
+
+.thread-item[data-role="human"] {
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.light .thread-item {
+  background: rgba(15, 23, 42, 0.06);
+}
+
+.light .thread-item[data-role="human"] {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.thread-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.48);
+}
+
+.light .thread-meta {
+  color: rgba(15, 23, 42, 0.46);
+}
+
+.thread-content {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.86);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.light .thread-content {
+  color: rgba(15, 23, 42, 0.8);
 }
 
 .styles-wrapper {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch, type ComponentPublicInstance } from "vue"
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, type ComponentPublicInstance, type CSSProperties } from "vue"
 import { ANNOTATIONS_STORE_KEY, FREEZE_KEY, I18N_KEY, OVERLAY_KEY, RUNTIME_BRIDGE_KEY, SELECTION_KEY, SETTINGS_KEY } from "../injection-keys.js"
+import { COPY_EXCLUDE_FIELDS } from "../copy-fields.js"
 import { COLOR_OPTIONS } from "../composables/useSettings.js"
 import { originalSetTimeout } from "../composables/useFreezeState.js"
 import { useToolbarDrag } from "../composables/useToolbarDrag.js"
@@ -30,9 +31,11 @@ import {
 import AgTooltip from "./AgTooltip.vue"
 
 const OUTPUT_DETAIL_KEYS = ["compact", "standard", "detailed", "forensic"] as const
+const SETTINGS_PAGE_KEYS = ["main", "copy", "automations"] as const
 const HELP_ICON_SIZE = 16
+const SETTINGS_PANEL_MAX_HEIGHT = 520
 
-type SettingsPage = "main" | "automations"
+type SettingsPage = typeof SETTINGS_PAGE_KEYS[number]
 
 const props = defineProps<{
   exportActions: ExportActions
@@ -47,9 +50,14 @@ const freezeState = injectStrict(FREEZE_KEY, "freeze state")
 const bridge = injectStrict(RUNTIME_BRIDGE_KEY, "runtime bridge")
 
 const toolbarRef = ref<HTMLElement | null>(null)
+const mainSettingsPageRef = ref<HTMLElement | null>(null)
+const copySettingsPageRef = ref<HTMLElement | null>(null)
+const automationsSettingsPageRef = ref<HTMLElement | null>(null)
 const expanded = ref(false)
 const settingsOpen = ref(false)
 const settingsPage = ref<SettingsPage>("main")
+const settingsPagesHeight = ref<number | null>(null)
+const guideCopyFeedback = ref<string | null>(null)
 const showEntranceAnimation = ref(false)
 const drag = useToolbarDrag({})
 
@@ -62,13 +70,65 @@ const isMarkdownFormat = computed(() => copyFormat.value === "markdown")
 const copyFeedbackActive = computed(() => props.exportActions.copyFeedback === copyFormat.value)
 const showMarkers = computed(() => settings.showMarkers)
 const panelOpen = computed(() => settingsOpen.value)
-const isAutomationsPanelOpen = computed(() => settingsPage.value === "automations")
 const messages = computed(() => i18n.messages)
+const settingsPageIndex = computed(() => SETTINGS_PAGE_KEYS.indexOf(settingsPage.value))
+const settingsPagesStyle = computed<CSSProperties>(() => {
+  const pageCount = SETTINGS_PAGE_KEYS.length
+  return {
+    "--ag-settings-page-count": String(pageCount),
+    width: `${pageCount * 100}%`,
+    transform: `translateX(-${(settingsPageIndex.value * 100) / pageCount}%)`,
+    ...(settingsPagesHeight.value === null ? {} : { height: `${settingsPagesHeight.value}px` }),
+  } as CSSProperties
+})
 const currentOutputDetailLabel = computed(() => messages.value.outputDetail[settings.outputDetail])
 const settingsPanelPlacement = computed(
   () => (drag.position.value?.y ?? Number.POSITIVE_INFINITY) < 230 ? "below" : "above",
 )
 const mcpConnected = computed(() => !!bridge.sync)
+const syncInfo = computed(() => bridge.sync?.info)
+const apiEndpoint = computed(() => syncInfo.value?.endpoint ?? "http://localhost:4747")
+const mcpHttpEndpoint = computed(() => syncInfo.value?.mcpHttpUrl ?? "http://localhost:4748/mcp")
+const mcpSseEndpoint = computed(() => syncInfo.value?.mcpSseUrl ?? "http://localhost:4748/sse")
+const cliCommand = computed(() => {
+  const apiPort = extractPort(apiEndpoint.value) ?? 4747
+  const mcpPort = extractPort(syncInfo.value?.mcpEndpoint ?? "") ?? 4748
+  return `npx agentation-vue-mcp server --port ${apiPort} --mcp-port ${mcpPort}`
+})
+const claudeCommand = computed(() => {
+  const apiPort = extractPort(apiEndpoint.value) ?? 4747
+  const mcpPort = extractPort(syncInfo.value?.mcpEndpoint ?? "") ?? 4748
+  return `claude mcp add agentation -- npx agentation-vue-mcp server --port ${apiPort} --mcp-port ${mcpPort}`
+})
+const webhookTargets = computed(() => (
+  settings.webhooksEnabled
+    ? settings.webhookUrl
+      .split(/[\n,]/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+    : []
+))
+const webhookEnv = computed(() => {
+  if (webhookTargets.value.length === 1) {
+    return `AGENTATION_WEBHOOK_URL=${webhookTargets.value[0]}`
+  }
+
+  if (webhookTargets.value.length > 1) {
+    return `AGENTATION_WEBHOOKS=${webhookTargets.value.join(",")}`
+  }
+
+  return "AGENTATION_WEBHOOK_URL=https://example.com/webhook\nAGENTATION_WEBHOOKS=https://a.example/webhook,https://b.example/webhook"
+})
+const connectionCards = computed(() => [
+  { key: "mcp-http", label: messages.value.settings.mcpHttpEndpointLabel, value: mcpHttpEndpoint.value },
+  { key: "mcp-sse", label: messages.value.settings.mcpSseEndpointLabel, value: mcpSseEndpoint.value },
+])
+const integrationCards = computed(() => [
+  { key: "cli-command", label: messages.value.settings.cliCommandLabel, value: cliCommand.value },
+  { key: "claude-command", label: messages.value.settings.claudeCommandLabel, value: claudeCommand.value },
+  { key: "cursor-endpoint", label: messages.value.settings.cursorEndpointLabel, value: mcpHttpEndpoint.value },
+  { key: "codex-endpoint", label: messages.value.settings.codexEndpointLabel, value: mcpSseEndpoint.value },
+])
 
 // Sync toolbar expanded state → annotation mode.
 // Collapsing disables selection; expanding re-enables it.
@@ -86,9 +146,11 @@ watch(expanded, async (isExpanded) => {
 }, { immediate: true })
 
 let entranceTimer: ReturnType<typeof setTimeout> | null = null
+let guideCopyTimer: ReturnType<typeof setTimeout> | null = null
 
 onMounted(() => {
   document.addEventListener("pointerdown", onOutsideClick, true)
+  window.addEventListener("resize", syncSettingsPanelHeight)
   showEntranceAnimation.value = true
   entranceTimer = originalSetTimeout(() => {
     showEntranceAnimation.value = false
@@ -98,13 +160,14 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener("pointerdown", onOutsideClick, true)
+  window.removeEventListener("resize", syncSettingsPanelHeight)
   if (entranceTimer) window.clearTimeout(entranceTimer)
+  if (guideCopyTimer) window.clearTimeout(guideCopyTimer)
 })
 
 function onOutsideClick(e: PointerEvent): void {
   if (!panelOpen.value) return
-  if (!(e.target instanceof Node)) return
-  if (toolbarRef.value?.contains(e.target)) return
+  if (isEventInsideToolbar(e)) return
   closeSettingsPanel()
 }
 
@@ -112,6 +175,18 @@ function setToolbarRef(element: Element | ComponentPublicInstance | null): void 
   const el = element instanceof HTMLElement ? element : null
   toolbarRef.value = el
   drag.bindToolbarRef(el)
+}
+
+function isEventInsideToolbar(event: Event): boolean {
+  const toolbar = toolbarRef.value
+  if (!toolbar) return false
+
+  const path = typeof event.composedPath === "function" ? event.composedPath() : []
+  if (path.length > 0) {
+    return path.some((entry) => entry instanceof Node && toolbar.contains(entry))
+  }
+
+  return event.target instanceof Node && toolbar.contains(event.target)
 }
 
 // --- Actions ---
@@ -157,9 +232,33 @@ function openAutomationsPanel(): void {
   settingsPage.value = "automations"
 }
 
+function openCopySettingsPanel(): void {
+  settingsOpen.value = true
+  settingsPage.value = "copy"
+}
+
 function showMainSettings(): void {
   settingsPage.value = "main"
 }
+
+function toggleCopyExcludedField(field: typeof COPY_EXCLUDE_FIELDS[number]): void {
+  settings.copyExcludeFields = settings.copyExcludeFields.includes(field)
+    ? settings.copyExcludeFields.filter((item) => item !== field)
+    : [...settings.copyExcludeFields, field]
+}
+
+watch(
+  [panelOpen, settingsPage, messages, mcpHttpEndpoint, mcpSseEndpoint, cliCommand, claudeCommand, webhookEnv, () => settings.copyExcludeFields.length],
+  async ([isOpen]) => {
+    if (!isOpen) {
+      settingsPagesHeight.value = null
+      return
+    }
+    await nextTick()
+    syncSettingsPanelHeight()
+  },
+  { flush: "post" },
+)
 
 function clearAll(): void {
   store.clearAll()
@@ -177,6 +276,86 @@ function exportCurrentFormat(): Promise<void> {
   return isMarkdownFormat.value
     ? props.exportActions.exportMarkdown()
     : props.exportActions.exportJSON()
+}
+
+function extractPort(input: string): number | null {
+  try {
+    const url = new URL(input)
+    const fallback = url.protocol === "https:" ? 443 : 80
+    const port = parseInt(url.port || String(fallback), 10)
+    return Number.isFinite(port) ? port : null
+  } catch {
+    return null
+  }
+}
+
+async function copyGuideValue(key: string, value: string): Promise<void> {
+  const copied = await writeTextToClipboard(value)
+  if (!copied) return
+
+  guideCopyFeedback.value = key
+  if (guideCopyTimer) {
+    window.clearTimeout(guideCopyTimer)
+  }
+
+  guideCopyTimer = originalSetTimeout(() => {
+    if (guideCopyFeedback.value === key) {
+      guideCopyFeedback.value = null
+    }
+    guideCopyTimer = null
+  }, 1400)
+}
+
+async function writeTextToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      // Fall through to legacy copy.
+    }
+  }
+
+  if (typeof document === "undefined") return false
+
+  const textarea = document.createElement("textarea")
+  textarea.value = text
+  textarea.setAttribute("readonly", "true")
+  textarea.style.position = "fixed"
+  textarea.style.opacity = "0"
+  textarea.style.pointerEvents = "none"
+  document.body.appendChild(textarea)
+  textarea.select()
+
+  try {
+    return document.execCommand("copy")
+  } catch {
+    return false
+  } finally {
+    textarea.remove()
+  }
+}
+
+function syncSettingsPanelHeight(): void {
+  if (!panelOpen.value) {
+    settingsPagesHeight.value = null
+    return
+  }
+
+  const activePage = settingsPage.value === "copy"
+    ? copySettingsPageRef.value
+    : settingsPage.value === "automations"
+      ? automationsSettingsPageRef.value
+      : mainSettingsPageRef.value
+
+  if (!activePage) return
+
+  settingsPagesHeight.value = Math.min(activePage.scrollHeight, getMaxSettingsPanelHeight())
+}
+
+function getMaxSettingsPanelHeight(): number {
+  if (typeof window === "undefined") return SETTINGS_PANEL_MAX_HEIGHT
+  return Math.min(SETTINGS_PANEL_MAX_HEIGHT, Math.round(window.innerHeight * 0.72))
 }
 </script>
 
@@ -251,8 +430,8 @@ function exportCurrentFormat(): Promise<void> {
           light: isLight,
           below: settingsPanelPlacement === 'below',
         }" data-no-drag @click.stop>
-          <div class="settings-pages" :class="{ 'show-automations': isAutomationsPanelOpen }">
-            <div class="settings-page">
+          <div class="settings-pages" :style="settingsPagesStyle">
+            <div ref="mainSettingsPageRef" class="settings-page">
               <div class="settings-header" :class="{ light: isLight }">
                 <span class="settings-brand" :class="{ light: isLight }">
                   <span class="settings-slash" :style="{ color: settings.annotationColor }">/</span>agentation
@@ -330,6 +509,18 @@ function exportCurrentFormat(): Promise<void> {
               </div>
 
               <div class="settings-section">
+                <button class="nav-btn" :class="{ light: isLight }" type="button" @click="openCopySettingsPanel">
+                  <span class="nav-btn-left">
+                    <IconCopyAnimated :size="18" />
+                    <span>{{ messages.settings.copySettings }}</span>
+                  </span>
+                  <span class="nav-btn-right">
+                    <IconChevronRight :size="16" />
+                  </span>
+                </button>
+              </div>
+
+              <div class="settings-section">
                 <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.markerColour }}</span>
                 <div class="color-row">
                   <button v-for="c in COLOR_OPTIONS" :key="c.key" class="color-ring"
@@ -398,32 +589,73 @@ function exportCurrentFormat(): Promise<void> {
               </div>
             </div>
 
-            <div class="settings-page">
-              <div class="settings-header" :class="{ light: isLight }">
+            <div ref="copySettingsPageRef" class="settings-page">
+              <div class="settings-header automations-header" :class="{ light: isLight }">
                 <button class="back-btn" :class="{ light: isLight }" type="button" @click="showMainSettings">
                   <IconChevronLeft :size="16" />
-                  <span>{{ messages.settings.manageMcpWebhooks }}</span>
+                  <span>{{ messages.settings.copySettings }}</span>
                 </button>
-                <span class="mcp-status" :class="{ light: isLight }">
-                  <span class="status-dot" :class="mcpConnected ? 'connected' : 'disconnected'" />
-                  {{ mcpConnected ? messages.settings.mcpStatusConnected : messages.settings.mcpStatusDisconnected }}
-                </span>
+              </div>
+
+              <div class="settings-section">
+                <p class="settings-description" :class="{ light: isLight }">
+                  {{ messages.settings.copySettingsDescription }}
+                </p>
               </div>
 
               <div class="settings-section">
                 <div class="settings-row">
-                  <span class="settings-label-with-help">
-                    <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.mcpConnection
-                      }}</span>
-                    <AgTooltip :content="messages.settings.mcpDescription">
-                      <IconHelp :size="HELP_ICON_SIZE"
-                        :style="{ color: isLight ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.3)', cursor: 'help' }" />
-                    </AgTooltip>
-                  </span>
+                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.copyPrefix }}</span>
                 </div>
                 <p class="settings-description" :class="{ light: isLight }">
-                  {{ messages.settings.mcpDescription }}
+                  {{ messages.settings.copyPrefixDescription }}
                 </p>
+                <textarea class="copy-prefix-input" :class="{ light: isLight }" :value="settings.copyPrefix"
+                  :placeholder="messages.settings.copyPrefixPlaceholder"
+                  :style="{ borderColor: settings.annotationColor }" rows="3" spellcheck="false"
+                  @input="settings.copyPrefix = ($event.target as HTMLTextAreaElement).value" />
+              </div>
+
+              <div class="settings-section">
+                <div class="settings-row">
+                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.copyExclusions }}</span>
+                </div>
+                <p class="settings-description" :class="{ light: isLight }">
+                  {{ messages.settings.copyExclusionsDescription }}
+                </p>
+
+                <div class="copy-field-list">
+                  <label v-for="field in COPY_EXCLUDE_FIELDS" :key="field" class="toggle-row copy-field-row">
+                    <input class="sr-only" type="checkbox" :checked="settings.copyExcludeFields.includes(field)"
+                      @change="toggleCopyExcludedField(field)">
+                    <span class="checkbox"
+                      :class="{ checked: settings.copyExcludeFields.includes(field), light: isLight }">
+                      <IconCheckSmallAnimated v-if="settings.copyExcludeFields.includes(field)" :size="14" />
+                    </span>
+                    <span class="toggle-label" :class="{ light: isLight }">
+                      {{ messages.settings.copyFieldLabels[field] }}
+                    </span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div ref="automationsSettingsPageRef" class="settings-page">
+              <div class="settings-header automations-header" :class="{ light: isLight }">
+                <button class="back-btn" :class="{ light: isLight }" type="button" @click="showMainSettings">
+                  <IconChevronLeft :size="16" />
+                  <span>{{ messages.settings.manageMcpWebhooks }}</span>
+                </button>
+              </div>
+
+              <div class="settings-section">
+                <div class="settings-row">
+                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.mcpConnection }}</span>
+                  <span class="mcp-status" :class="{ light: isLight }">
+                    <span class="status-dot" :class="mcpConnected ? 'connected' : 'disconnected'" />
+                    {{ mcpConnected ? messages.settings.mcpStatusConnected : messages.settings.mcpStatusDisconnected }}
+                  </span>
+                </div>
               </div>
 
               <div class="settings-section">
@@ -454,6 +686,70 @@ function exportCurrentFormat(): Promise<void> {
                   :placeholder="messages.settings.webhooksUrlPlaceholder"
                   :style="{ borderColor: settings.annotationColor }" rows="2" spellcheck="false"
                   @input="settings.webhookUrl = ($event.target as HTMLTextAreaElement).value" />
+              </div>
+
+              <div class="settings-section">
+                <div class="guide-card" :class="{ light: isLight }">
+                  <div class="guide-card-title">{{ messages.settings.mcpConnection }}</div>
+                  <p class="settings-description" :class="{ light: isLight }">
+                    {{ messages.settings.mcpDescription }}
+                  </p>
+                </div>
+              </div>
+
+              <div class="settings-section">
+                <div class="guide-grid">
+                  <div v-for="item in connectionCards" :key="item.key" class="guide-card" :class="{ light: isLight }">
+                    <div class="guide-card-header">
+                      <div class="guide-card-title">{{ item.label }}</div>
+                      <button class="guide-copy-btn" :class="{ light: isLight }" type="button"
+                        :title="messages.settings.copyValueAria(item.label)"
+                        :aria-label="messages.settings.copyValueAria(item.label)"
+                        :data-copied="guideCopyFeedback === item.key || undefined"
+                        @click="void copyGuideValue(item.key, item.value)">
+                        <IconCopyAnimated :size="16" :copied="guideCopyFeedback === item.key" />
+                      </button>
+                    </div>
+                    <pre class="guide-code" :class="{ light: isLight }">{{ item.value }}</pre>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-section">
+                <div class="guide-grid">
+                  <div v-for="item in integrationCards" :key="item.key" class="guide-card" :class="{ light: isLight }">
+                    <div class="guide-card-header">
+                      <div class="guide-card-title">{{ item.label }}</div>
+                      <button class="guide-copy-btn" :class="{ light: isLight }" type="button"
+                        :title="messages.settings.copyValueAria(item.label)"
+                        :aria-label="messages.settings.copyValueAria(item.label)"
+                        :data-copied="guideCopyFeedback === item.key || undefined"
+                        @click="void copyGuideValue(item.key, item.value)">
+                        <IconCopyAnimated :size="16" :copied="guideCopyFeedback === item.key" />
+                      </button>
+                    </div>
+                    <pre class="guide-code" :class="{ light: isLight }">{{ item.value }}</pre>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-section">
+                <div class="guide-card" :class="{ light: isLight }">
+                  <div class="guide-card-header">
+                    <div class="guide-card-title">{{ messages.settings.webhookEnvLabel }}</div>
+                    <button class="guide-copy-btn" :class="{ light: isLight }" type="button"
+                      :title="messages.settings.copyValueAria(messages.settings.webhookEnvLabel)"
+                      :aria-label="messages.settings.copyValueAria(messages.settings.webhookEnvLabel)"
+                      :data-copied="guideCopyFeedback === 'webhook-env' || undefined"
+                      @click="void copyGuideValue('webhook-env', webhookEnv)">
+                      <IconCopyAnimated :size="16" :copied="guideCopyFeedback === 'webhook-env'" />
+                    </button>
+                  </div>
+                  <p class="settings-description" :class="{ light: isLight }">
+                    {{ messages.settings.webhookDescriptionLong }}
+                  </p>
+                  <pre class="guide-code" :class="{ light: isLight }">{{ webhookEnv }}</pre>
+                </div>
               </div>
             </div>
           </div>
@@ -855,16 +1151,28 @@ function exportCurrentFormat(): Promise<void> {
 /* --- Settings header ------------------------------------------------- */
 
 .settings-header {
+  position: sticky;
+  top: -13px;
+  z-index: 2;
   display: flex;
   align-items: center;
   min-height: 24px;
-  margin-bottom: 8px;
-  padding-bottom: 9px;
+  margin: -13px -16px 8px;
+  background: #1a1a1a;
+  padding: 13px 16px 9px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .settings-header.light {
+  background: #fff;
   border-bottom-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+
+.automations-header {
+  padding-top: 20px;
+  padding-bottom: 20px;
 }
 
 .settings-brand {
@@ -1280,29 +1588,88 @@ function exportCurrentFormat(): Promise<void> {
   color: rgba(0, 0, 0, 0.5);
 }
 
+.copy-field-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.copy-field-row+.copy-field-row {
+  margin-top: 0;
+}
+
 .webhook-toggle {
   margin-top: 8px;
+}
+
+.copy-prefix-input,
+.webhook-url {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.45;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.copy-prefix-input {
+  resize: none;
+  font-family: inherit;
+}
+
+.webhook-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical;
+}
+
+.copy-prefix-input:focus,
+.webhook-url:focus {
+  border-color: inherit;
+}
+
+.copy-prefix-input::placeholder,
+.webhook-url::placeholder {
+  color: rgba(255, 255, 255, 0.25);
+}
+
+.copy-prefix-input.light,
+.webhook-url.light {
+  border-color: rgba(0, 0, 0, 0.12);
+  background: rgba(0, 0, 0, 0.02);
+  color: rgba(0, 0, 0, 0.85);
+}
+
+.copy-prefix-input.light::placeholder,
+.webhook-url.light::placeholder {
+  color: rgba(0, 0, 0, 0.3);
 }
 
 /* --- Settings page slider -------------------------------------------- */
 
 .settings-pages {
   display: flex;
-  width: 200%;
-  transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.settings-pages.show-automations {
-  transform: translateX(-50%);
+  align-items: flex-start;
+  transition:
+    transform 0.25s cubic-bezier(0.22, 1, 0.36, 1),
+    height 0.2s ease;
 }
 
 .settings-page {
-  flex: 0 0 50%;
-  width: 50%;
+  flex: 0 0 calc(100% / var(--ag-settings-page-count, 2));
+  width: calc(100% / var(--ag-settings-page-count, 2));
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
   min-width: 0;
+  max-height: min(72vh, 520px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 13px 16px 16px;
 }
 
@@ -1452,41 +1819,105 @@ function exportCurrentFormat(): Promise<void> {
   color: rgba(0, 0, 0, 0.4);
 }
 
-/* --- Webhook URL textarea -------------------------------------------- */
+/* --- Get started guide ----------------------------------------------- */
 
-.webhook-url {
-  display: block;
-  width: 100%;
-  margin-top: 8px;
-  padding: 8px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #fff;
-  font-size: 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  line-height: 1.45;
-  resize: vertical;
-  outline: none;
-  transition: border-color 0.15s ease;
+.guide-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
 }
 
-.webhook-url:focus {
-  border-color: inherit;
+.guide-card {
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
 }
 
-.webhook-url::placeholder {
-  color: rgba(255, 255, 255, 0.25);
-}
-
-.webhook-url.light {
-  border-color: rgba(0, 0, 0, 0.12);
+.guide-card.light {
+  border-color: rgba(0, 0, 0, 0.08);
   background: rgba(0, 0, 0, 0.02);
-  color: rgba(0, 0, 0, 0.85);
 }
 
-.webhook-url.light::placeholder {
-  color: rgba(0, 0, 0, 0.3);
+.guide-card+.guide-card {
+  margin-top: 8px;
+}
+
+.guide-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.guide-card-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.guide-copy-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.42);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    transform 0.1s ease;
+}
+
+.guide-copy-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.guide-copy-btn:active {
+  transform: scale(0.94);
+}
+
+.guide-copy-btn[data-copied] {
+  color: #22c55e;
+}
+
+.guide-copy-btn.light {
+  color: rgba(0, 0, 0, 0.38);
+}
+
+.guide-copy-btn.light:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: rgba(0, 0, 0, 0.74);
+}
+
+.settings-panel.light .guide-card-title {
+  color: rgba(0, 0, 0, 0.74);
+}
+
+.guide-code {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.68);
+  color: #e2e8f0;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.guide-code.light {
+  background: rgba(241, 245, 249, 0.95);
+  color: rgba(15, 23, 42, 0.9);
 }
 
 /* Global: applied to <html> during toolbar drag */

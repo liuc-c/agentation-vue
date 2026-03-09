@@ -1,4 +1,4 @@
-import type { OutputDetailLevel } from "@liuovo/agentation-vue-core"
+import type { ExportExcludeField, OutputDetailLevel } from "@liuovo/agentation-vue-core"
 
 // ---------------------------------------------------------------------------
 // i18n type definitions
@@ -45,6 +45,16 @@ export interface Messages {
     annotationAria: (n: number) => string
     clickToEdit: string
   }
+  workflow: {
+    statusPending: string
+    statusAcknowledged: string
+    statusResolved: string
+    statusDismissed: string
+    roleAgent: string
+    roleHuman: string
+    thread: string
+    replyCount: (count: number) => string
+  }
   settings: {
     lightMode: string
     darkMode: string
@@ -55,11 +65,20 @@ export interface Messages {
     exportFormat: string
     exportFormatMarkdownAria: string
     exportFormatJsonAria: string
+    copySettings: string
+    copySettingsDescription: string
+    copyPrefix: string
+    copyPrefixDescription: string
+    copyPrefixPlaceholder: string
+    copyExclusions: string
+    copyExclusionsDescription: string
+    copyFieldLabels: Record<ExportExcludeField, string>
     markerColour: string
     clearOnCopy: string
     blockPageInteractions: string
     componentSource: string
     manageMcpWebhooks: string
+    getStarted: string
     mcpConnection: string
     mcpDescription: string
     mcpLearnMore: string
@@ -72,6 +91,22 @@ export interface Messages {
     outputDetailHelp: string
     componentSourceHelp: string
     blockInteractionsHelp: string
+    getStartedDescription: string
+    sharedServerTitle: string
+    sharedServerDescription: string
+    isolationTitle: string
+    isolationDescription: string
+    projectScopeLabel: string
+    apiEndpointLabel: string
+    mcpHttpEndpointLabel: string
+    mcpSseEndpointLabel: string
+    cliCommandLabel: string
+    claudeCommandLabel: string
+    cursorEndpointLabel: string
+    codexEndpointLabel: string
+    webhookEnvLabel: string
+    webhookDescriptionLong: string
+    copyValueAria: (label: string) => string
   }
   colors: {
     purple: string
@@ -89,6 +124,8 @@ export interface Messages {
   notifications: {
     sourceUnavailableElement: string
     sourceUnavailableArea: string
+    remoteSyncUpdated: (count: number) => string
+    syncFailed: (message: string) => string
   }
 }
 

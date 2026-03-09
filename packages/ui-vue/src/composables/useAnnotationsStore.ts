@@ -196,6 +196,8 @@ function buildMetadata(snapshot: SelectionSnapshot): Record<string, unknown> {
     element,
     rect,
     elementPath,
+    source,
+    selectedText,
     isMultiSelect = false,
     multiSelectElements,
     elementBoundingBoxes,
@@ -230,12 +232,65 @@ function buildMetadata(snapshot: SelectionSnapshot): Record<string, unknown> {
     isMultiSelect: isMultiSelect || undefined,
     elementBoundingBoxes: selectionBoxes?.length ? selectionBoxes : undefined,
     isFixed: isMultiSelect ? undefined : fixed,
+    project_area: buildProjectArea(snapshot),
+    context_hints: buildContextHints({
+      element,
+      source,
+      selectedText,
+      nearbyText: getNearbyText(element) || undefined,
+      isMultiSelect,
+    }),
   }
 
   // Strip undefined entries for clean JSON
   return Object.fromEntries(
     Object.entries(raw).filter(([, v]) => v !== undefined),
   )
+}
+
+function buildProjectArea(snapshot: SelectionSnapshot): string | undefined {
+  const route = window.location.pathname || "/"
+  const hierarchy = snapshot.source.componentHierarchy || snapshot.source.componentName
+  const landmark = getLandmarkLabel(snapshot.element)
+
+  const parts = [route, hierarchy, landmark].filter(Boolean)
+  return parts.length > 0 ? parts.join(" :: ") : undefined
+}
+
+function buildContextHints(input: {
+  element: HTMLElement
+  source: SelectionSnapshot["source"]
+  selectedText?: string
+  nearbyText?: string
+  isMultiSelect?: boolean
+}): string[] | undefined {
+  const hints = new Set<string>()
+  const { element, source, selectedText, nearbyText, isMultiSelect } = input
+
+  const pushHint = (label: string, value: string | null | undefined) => {
+    const trimmed = value?.trim()
+    if (!trimmed) return
+    hints.add(`${label}: ${trimmed.slice(0, 120)}`)
+  }
+
+  pushHint("route", window.location.pathname || "/")
+  pushHint("component", source.componentName)
+  pushHint("componentHierarchy", source.componentHierarchy)
+  pushHint("framework", source.framework)
+  pushHint("selectedText", selectedText)
+  pushHint("nearbyText", nearbyText)
+  pushHint("heading", findClosestHeadingText(element))
+  pushHint("landmark", getLandmarkLabel(element))
+  pushHint("role", element.getAttribute("role"))
+  pushHint("ariaLabel", element.getAttribute("aria-label"))
+  pushHint("name", element.getAttribute("name"))
+  pushHint("placeholder", element.getAttribute("placeholder"))
+  pushHint("title", element.getAttribute("title"))
+  pushHint("testId", element.getAttribute("data-testid") || element.getAttribute("data-test"))
+  pushHint("id", element.id || undefined)
+  pushHint("multiSelect", isMultiSelect ? "true" : undefined)
+
+  return hints.size > 0 ? [...hints].slice(0, 8) : undefined
 }
 
 function toDocumentBox(rect: DOMRectReadOnly, isFixed: boolean): BoundingBox {
@@ -267,6 +322,28 @@ function generateId(): string {
     return crypto.randomUUID()
   }
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function findClosestHeadingText(element: HTMLElement): string | undefined {
+  const heading = element.closest("section, article, main, aside, form, dialog")
+    ?.querySelector<HTMLElement>("h1, h2, h3, h4, h5, h6")
+    ?? element.closest<HTMLElement>("label")
+
+  return heading?.innerText.trim() || undefined
+}
+
+function getLandmarkLabel(element: HTMLElement): string | undefined {
+  const landmark = element.closest<HTMLElement>(
+    "[role], main, header, nav, aside, footer, section, article, form, dialog",
+  )
+  if (!landmark) return undefined
+
+  const role = landmark.getAttribute("role") || landmark.tagName.toLowerCase()
+  const label = landmark.getAttribute("aria-label")
+    || landmark.getAttribute("data-testid")
+    || landmark.id
+
+  return label ? `${role}:${label}` : role
 }
 
 function isFixedPosition(element: HTMLElement): boolean {
