@@ -267,10 +267,10 @@ function createShellPlugin(options: AgentationVueOptions): Plugin {
     apply: "serve",
 
     configResolved(config) {
-      resolved = resolveOptions(options, config.command)
+      resolved = resolveOptions(options, config.command, config.root)
       logTerm(
         resolved.enabled ? "configResolved ✅" : "configResolved ⏸️  plugin disabled",
-        `command=${config.command}`,
+        `command=${config.command}${resolved.sync && resolved.sync.projectId ? ` projectId=${resolved.sync.projectId}` : ""}`,
       )
     },
 

@@ -3,6 +3,7 @@ import type { Plugin, ResolvedConfig, ViteDevServer } from "vite"
 
 const spawnMock = vi.fn()
 const useMock = vi.fn()
+const inferredProjectId = "workspace-scope-z7k2m9p"
 
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
@@ -102,6 +103,45 @@ describe("agentation plugin shared server startup", () => {
     expect(useMock).toHaveBeenCalledTimes(1)
 
     logSpy.mockRestore()
+  })
+
+  it("injects the inferred projectId from Vite root into the runtime config", async () => {
+    const { agentation } = await import("./plugin.ts")
+    const [shell] = agentation()
+    const configResolvedHook = getHookHandler<ResolvedConfig>(shell, "configResolved")
+    const configureServerHook = getHookHandler<ViteDevServer>(shell, "configureServer")
+
+    configResolvedHook?.({
+      command: "serve",
+      root: `/tmp/${inferredProjectId}`,
+    } as never)
+
+    await expect(configureServerHook?.({
+      middlewares: {
+        use: useMock,
+      },
+    } as never)).resolves.toBeUndefined()
+
+    const middleware = useMock.mock.calls[0]?.[0] as
+      | ((req: { url?: string }, res: { statusCode: number; setHeader: (...args: unknown[]) => void; end: (body: string) => void }, next: () => void) => void)
+      | undefined
+
+    expect(middleware).toBeTypeOf("function")
+
+    const setHeader = vi.fn()
+    const end = vi.fn()
+    const next = vi.fn()
+    const res = {
+      statusCode: 0,
+      setHeader,
+      end,
+    }
+
+    middleware?.({ url: "/@agentation-vue/init.js" }, res, next)
+
+    expect(next).not.toHaveBeenCalled()
+    expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/javascript; charset=utf-8")
+    expect(end).toHaveBeenCalledWith(expect.stringContaining(`"projectId":"${inferredProjectId}"`))
   })
 })
 

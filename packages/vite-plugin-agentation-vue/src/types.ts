@@ -1,3 +1,4 @@
+import { basename, resolve } from "node:path"
 import {
   DEFAULT_STORAGE_PREFIX,
   type AnnotationV2,
@@ -68,15 +69,30 @@ export interface ResolvedAgentationVueOptions {
   inspector: "tracer"
 }
 
+function inferProjectIdFromRoot(rootDir?: string): string | undefined {
+  if (!rootDir?.trim()) {
+    return undefined
+  }
+
+  const projectId = basename(resolve(rootDir))
+  if (!projectId || projectId === "." || projectId === "/") {
+    return undefined
+  }
+
+  return projectId
+}
+
 export function resolveOptions(
   raw: AgentationVueOptions = {},
   command: "serve" | "build" = "serve",
+  rootDir?: string,
 ): ResolvedAgentationVueOptions {
   const resolvedSync = raw.sync === false
     ? false
     : {
         ...DEFAULT_AGENTATION_SYNC_OPTIONS,
         ...raw.sync,
+        projectId: raw.sync?.projectId?.trim() || inferProjectIdFromRoot(rootDir),
       }
 
   return {

@@ -5,6 +5,8 @@ import {
   resolveOptions,
 } from "./types.ts"
 
+const inferredProjectId = "workspace-scope-z7k2m9p"
+
 describe("resolveOptions", () => {
   it("enables sync by default in serve mode", () => {
     const resolved = resolveOptions({}, "serve")
@@ -27,6 +29,27 @@ describe("resolveOptions", () => {
       ensureServer: true,
     })
     expect(resolveMcpEndpoint(resolved.sync as Exclude<typeof resolved.sync, false>)).toBe("http://localhost:5001")
+  })
+
+  it("infers projectId from the Vite root directory", () => {
+    const resolved = resolveOptions({}, "serve", `/tmp/${inferredProjectId}`)
+
+    expect(resolved.sync).toMatchObject({
+      projectId: inferredProjectId,
+    })
+  })
+
+  it("prefers an explicit projectId over the inferred root name", () => {
+    const resolved = resolveOptions({
+      sync: {
+        endpoint: "http://localhost:5000",
+        projectId: "custom-project",
+      },
+    }, "serve", `/tmp/${inferredProjectId}`)
+
+    expect(resolved.sync).toMatchObject({
+      projectId: "custom-project",
+    })
   })
 
   it("allows explicit sync disable", () => {

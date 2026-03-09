@@ -57,7 +57,7 @@ agentation({
   sync: {
     endpoint: "http://localhost:4747",
     mcpEndpoint: "http://localhost:4748",
-    projectId: "demo-app",
+    projectId: "demo-app", // defaults to the Vite root folder name
     autoSync: true,     // default
     debounceMs: 400,    // default
     ensureServer: true, // default
