@@ -1,2 +1,2 @@
-export * from "./annotation.js"
-export * from "./session.js"
+export * from "./annotation.ts"
+export * from "./session.ts"

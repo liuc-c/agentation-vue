@@ -13,21 +13,21 @@
   "bugs": {
     "url": "https://github.com/liuc-c/agentation-vue/issues"
   },
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "node": "./dist/index.js",
+      "node": "./src/index.ts",
       "import": "./src/index.ts",
-      "default": "./dist/index.js"
+      "default": "./src/index.ts"
     },
     "./dom/freeze-animations": {
       "types": "./dist/dom/freeze-animations.d.ts",
-      "node": "./dist/dom/freeze-animations.js",
+      "node": "./src/dom/freeze-animations.ts",
       "import": "./src/dom/freeze-animations.ts",
-      "default": "./dist/dom/freeze-animations.js"
+      "default": "./src/dom/freeze-animations.ts"
     }
   },
   "publishConfig": {

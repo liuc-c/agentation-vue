@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
-import { formatToJSON } from "./format-json.js"
-import type { AnnotationV2 } from "../types/index.js"
+import { formatToJSON } from "./format-json.ts"
+import type { AnnotationV2 } from "../types/index.ts"
 
 function makeAnnotation(overrides: Partial<AnnotationV2> = {}): AnnotationV2 {
   return {

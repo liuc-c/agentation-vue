@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
-import { formatToMarkdown } from "./format-markdown.js"
-import type { AnnotationV2 } from "../types/index.js"
+import { formatToMarkdown } from "./format-markdown.ts"
+import type { AnnotationV2 } from "../types/index.ts"
 
 function makeAnnotation(overrides: Partial<AnnotationV2> = {}): AnnotationV2 {
   return {

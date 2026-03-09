@@ -3,7 +3,7 @@ import {
   DEFAULT_AGENTATION_SYNC_OPTIONS,
   resolveMcpEndpoint,
   resolveOptions,
-} from "./types.js"
+} from "./types.ts"
 
 describe("resolveOptions", () => {
   it("enables sync by default in serve mode", () => {

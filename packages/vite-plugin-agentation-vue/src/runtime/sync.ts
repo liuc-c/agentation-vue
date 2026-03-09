@@ -20,8 +20,8 @@ import type {
 import type {
   AgentationStorageBridge,
   AgentationVueSyncOptions,
-} from "../types.js"
-import { resolveMcpEndpoint } from "../types.js"
+} from "../types.ts"
+import { resolveMcpEndpoint } from "../types.ts"
 
 type StoredAnnotation = AnnotationV2 & { _syncedTo?: string }
 

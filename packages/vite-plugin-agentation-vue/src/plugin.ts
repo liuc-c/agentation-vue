@@ -6,14 +6,14 @@ import {
   resolveOptions,
   type AgentationVueOptions,
   type AgentationVueSyncOptions,
-} from "./types.js"
+} from "./types.ts"
 import {
   INIT_SCRIPT_PATH,
   createInitModuleSource,
   createInjectionTag,
   loadVirtualModule,
   resolveVirtualId,
-} from "./virtual.js"
+} from "./virtual.ts"
 
 // ---------------------------------------------------------------------------
 // Terminal logging (ANSI colors + ASCII art)

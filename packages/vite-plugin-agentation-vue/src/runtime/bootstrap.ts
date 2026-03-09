@@ -16,8 +16,8 @@ import type {
   UiNotification,
 } from "@liuovo/agentation-vue-ui"
 import { resolveMessages } from "@liuovo/agentation-vue-ui"
-import type { AgentationStorageBridge } from "../types.js"
-import { resolveElementSource } from "./resolver/index.js"
+import type { AgentationStorageBridge } from "../types.ts"
+import { resolveElementSource } from "./resolver/index.ts"
 
 // ---------------------------------------------------------------------------
 // Constants

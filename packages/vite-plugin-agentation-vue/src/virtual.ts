@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { normalizePath, type HtmlTagDescriptor } from "vite"
-import type { ResolvedAgentationVueOptions } from "./types.js"
+import type { ResolvedAgentationVueOptions } from "./types.ts"
 
 export const VIRTUAL_MODULE_ID = "virtual:agentation"
 const RESOLVED_VIRTUAL_ID = `\0${VIRTUAL_MODULE_ID}`

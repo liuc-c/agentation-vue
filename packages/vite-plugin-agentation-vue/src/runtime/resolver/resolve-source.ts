@@ -1,7 +1,7 @@
 import type { SourceLocation } from "@liuovo/agentation-vue-core"
 import type { ElementTraceInfo } from "vite-plugin-vue-tracer/client/record"
-import { mapTraceToSourceLocation } from "./tracer-adapter.js"
-import { resolveFromVueInternals } from "./vue-internal.js"
+import { mapTraceToSourceLocation } from "./tracer-adapter.ts"
+import { resolveFromVueInternals } from "./vue-internal.ts"
 
 type FindTraceFn = (el?: Element | null) => ElementTraceInfo | undefined
 

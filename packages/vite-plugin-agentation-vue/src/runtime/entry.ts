@@ -8,10 +8,10 @@ import {
   createSettingsState,
 } from "@liuovo/agentation-vue-ui"
 import type { RuntimeBridge, UiNotification } from "@liuovo/agentation-vue-ui"
-import type { ResolvedAgentationVueOptions } from "../types.js"
-import { bindTracer } from "./resolver/index.js"
-import { setupInfrastructure, attachListeners } from "./bootstrap.js"
-import { createRuntimeSyncBridge } from "./sync.js"
+import type { ResolvedAgentationVueOptions } from "../types.ts"
+import { bindTracer } from "./resolver/index.ts"
+import { setupInfrastructure, attachListeners } from "./bootstrap.ts"
+import { createRuntimeSyncBridge } from "./sync.ts"
 
 // ---------------------------------------------------------------------------
 // Browser console logging (styled with %c)

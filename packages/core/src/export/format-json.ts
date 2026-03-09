@@ -1,6 +1,6 @@
-import type { AnnotationV2, OutputDetailLevel } from "../types/index.js"
-import type { ExportExcludeField } from "./exclude-fields.js"
-import type { ExportPageContext } from "./format-markdown.js"
+import type { AnnotationV2, OutputDetailLevel } from "../types/index.ts"
+import type { ExportExcludeField } from "./exclude-fields.ts"
+import type { ExportPageContext } from "./format-markdown.ts"
 
 export interface JsonFormatOptions {
   detailLevel?: OutputDetailLevel

@@ -1,4 +1,4 @@
-import type { AnnotationThreadMessage, AnnotationV2 } from "./annotation.js"
+import type { AnnotationThreadMessage, AnnotationV2 } from "./annotation.ts"
 
 export type SessionStatus = "active" | "approved" | "closed"
 

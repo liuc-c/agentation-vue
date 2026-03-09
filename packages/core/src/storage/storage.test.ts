@@ -10,7 +10,7 @@ import {
   clearSessionId,
   loadAllAnnotations,
   getStorageKey,
-} from "./storage.js"
+} from "./storage.ts"
 
 function createMemoryStorage(): Storage {
   const data = new Map<string, string>()

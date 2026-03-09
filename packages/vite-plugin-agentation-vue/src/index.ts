@@ -17,8 +17,8 @@
  */
 
 // Plugin factory (primary export)
-export { agentation, agentationVue } from "./plugin.js"
-export { agentation as default } from "./plugin.js"
+export { agentation, agentationVue } from "./plugin.ts"
+export { agentation as default } from "./plugin.ts"
 
 // Plugin option types
 export type {
@@ -26,8 +26,8 @@ export type {
   AgentationVuePluginOptions,
   AgentationVueSyncOptions,
   ResolvedAgentationVueOptions,
-} from "./types.js"
+} from "./types.ts"
 
 // Resolver API — usable independently of the full plugin
-export { resolveElementSource, bindTracer } from "./runtime/resolver/index.js"
+export { resolveElementSource, bindTracer } from "./runtime/resolver/index.ts"
 export type { SourceLocation, FrameworkKind } from "@liuovo/agentation-vue-core"

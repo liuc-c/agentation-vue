@@ -1,5 +1,5 @@
-import type { AnnotationV2, OutputDetailLevel } from "../types/index.js"
-import type { ExportExcludeField } from "./exclude-fields.js"
+import type { AnnotationV2, OutputDetailLevel } from "../types/index.ts"
+import type { ExportExcludeField } from "./exclude-fields.ts"
 
 export interface ExportViewport {
   width: number

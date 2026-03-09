@@ -1,4 +1,4 @@
-export * from "./element-identification.js"
+export * from "./element-identification.ts"
 // NOTE: freeze-animations.ts is intentionally NOT re-exported here.
 // It installs global monkey-patches as a side effect of import.
 // Consumers should import it explicitly when needed:

@@ -10,16 +10,16 @@
  */
 
 // Types
-export * from "./types/index.js"
+export * from "./types/index.ts"
 
 // DOM utilities (element identification only — freeze-animations has side effects)
-export * from "./dom/index.js"
+export * from "./dom/index.ts"
 
 // Storage
-export * from "./storage/index.js"
+export * from "./storage/index.ts"
 
 // Transport / sync
-export * from "./transport/index.js"
+export * from "./transport/index.ts"
 
 // Export formatters
-export * from "./export/index.js"
+export * from "./export/index.ts"

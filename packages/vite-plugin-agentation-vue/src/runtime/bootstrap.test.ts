@@ -11,10 +11,10 @@ vi.mock("@liuovo/agentation-vue-ui", () => ({
   }),
 }))
 
-let setupInfrastructure: typeof import("./bootstrap.js").setupInfrastructure
+let setupInfrastructure: typeof import("./bootstrap.ts").setupInfrastructure
 
 beforeEach(async () => {
-  ;({ setupInfrastructure } = await import("./bootstrap.js"))
+  ;({ setupInfrastructure } = await import("./bootstrap.ts"))
 })
 
 describe("setupInfrastructure", () => {

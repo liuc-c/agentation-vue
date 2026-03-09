@@ -1,4 +1,4 @@
-import type { AnnotationV2, Session, SessionWithAnnotations } from "../types/index.js"
+import type { AnnotationV2, Session, SessionWithAnnotations } from "../types/index.ts"
 
 /**
  * Resolves the V2 API base URL from a user-provided endpoint.

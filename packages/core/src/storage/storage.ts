@@ -1,4 +1,4 @@
-import type { AnnotationV2 } from "../types/index.js"
+import type { AnnotationV2 } from "../types/index.ts"
 
 export const DEFAULT_STORAGE_PREFIX = "agentation-vue-"
 export const DEFAULT_SESSION_PREFIX = "agentation-vue-session-"
