@@ -15,6 +15,8 @@ import {
 // ---------------------------------------------------------------------------
 
 const STORAGE_KEY = "agentation-vue-toolbar-position"
+const POSITION_SANITY_MULTIPLIER = 3
+const POSITION_SANITY_MIN_LIMIT = 5000
 
 export interface ToolbarPosition {
   x: number
@@ -88,7 +90,9 @@ export function useToolbarDrag(options: {
   // --- Viewport constraint -------------------------------------------------
   function constrain(pos: ToolbarPosition): ToolbarPosition {
     if (typeof window === "undefined") return pos
-    const contentOffset = Math.max(0, cachedWrapperWidth - cachedContentWidth)
+    const rawOffset = cachedWrapperWidth - cachedContentWidth
+    const maxReasonableOffset = window.innerWidth + padding
+    const contentOffset = Math.max(0, Math.min(rawOffset, maxReasonableOffset))
     const minX = padding - contentOffset
     const maxX = window.innerWidth - cachedWrapperWidth - padding
     const maxY = window.innerHeight - toolbarHeight - padding
@@ -234,6 +238,21 @@ export function useToolbarDrag(options: {
     savePosition(constrained)
   }
 
+  let postMountTimer: number | null = null
+  let postMountRaf: number | null = null
+
+  function schedulePostMountSync(): void {
+    if (typeof window === "undefined") return
+    postMountRaf = window.requestAnimationFrame(() => {
+      syncConstraints()
+      postMountTimer = window.setTimeout(() => {
+        syncConstraints()
+        postMountTimer = null
+      }, 120)
+      postMountRaf = null
+    })
+  }
+
   // --- Public API ----------------------------------------------------------
 
   function bindToolbarRef(element: HTMLElement | null): void {
@@ -260,7 +279,10 @@ export function useToolbarDrag(options: {
       const constrained = constrain({ x: x.value, y: y.value })
       x.value = constrained.x
       y.value = constrained.y
+      savePosition(constrained)
     }
+
+    schedulePostMountSync()
 
     window.addEventListener("resize", onResize)
     window.addEventListener("blur", onWindowBlur)
@@ -270,6 +292,14 @@ export function useToolbarDrag(options: {
     if (isDragging.value) unlockInteraction()
     isDragging.value = false
     session = null
+    if (postMountTimer != null) {
+      window.clearTimeout(postMountTimer)
+      postMountTimer = null
+    }
+    if (postMountRaf != null) {
+      window.cancelAnimationFrame(postMountRaf)
+      postMountRaf = null
+    }
     window.removeEventListener("resize", onResize)
     window.removeEventListener("blur", onWindowBlur)
   })
@@ -297,6 +327,15 @@ function loadPosition(): ToolbarPosition | null {
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<ToolbarPosition>
     if (typeof parsed.x !== "number" || typeof parsed.y !== "number") return null
+    if (!Number.isFinite(parsed.x) || !Number.isFinite(parsed.y)) return null
+
+    const limitX = Math.max(window.innerWidth * POSITION_SANITY_MULTIPLIER, POSITION_SANITY_MIN_LIMIT)
+    const limitY = Math.max(window.innerHeight * POSITION_SANITY_MULTIPLIER, POSITION_SANITY_MIN_LIMIT)
+    if (Math.abs(parsed.x) > limitX || Math.abs(parsed.y) > limitY) {
+      window.localStorage.removeItem(STORAGE_KEY)
+      return null
+    }
+
     return { x: parsed.x, y: parsed.y }
   } catch {
     return null

@@ -42,6 +42,10 @@ describe("setupInfrastructure", () => {
     expect(overlayHost?.shadowRoot?.getElementById("agentation-overlay-root")).toBe(infra.overlayRoot)
     expect(appHost?.style.pointerEvents).toBe("none")
     expect(overlayHost?.style.pointerEvents).toBe("none")
+    expect(infra.appRoot.style.fontSize).toBe("16px")
+    expect(infra.appRoot.style.lineHeight).toBe("1.5")
+    expect(infra.overlayRoot.style.fontSize).toBe("16px")
+    expect(infra.overlayRoot.style.lineHeight).toBe("1.5")
 
     const appShadowStyle = appHost?.shadowRoot?.querySelector("style[data-agentation-shadow-style]")
     const overlayShadowStyle = overlayHost?.shadowRoot?.querySelector("style[data-agentation-shadow-style]")

@@ -201,6 +201,8 @@ watch(
   inset: 0;
   z-index: 99999;
   pointer-events: none;
+  font-size: 16px;
+  line-height: 1.5;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
 }
 
@@ -264,6 +266,11 @@ watch(
   --ag-shadow: 0 16px 48px rgba(148, 163, 184, 0.2);
   color: var(--ag-text);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+:global([data-ag-theme]) {
+  font-size: 16px;
+  line-height: 1.5;
 }
 
 .agentation-root,

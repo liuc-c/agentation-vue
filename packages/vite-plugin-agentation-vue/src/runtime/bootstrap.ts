@@ -39,6 +39,11 @@ const CONTAINER_BASE_STYLES = [
   ["pointer-events", "none"],
   ["background", "none"],
 ] as const
+const SHADOW_ROOT_CONTAINER_BASE_STYLES = [
+  ["font-size", "16px"],
+  ["line-height", "1.5"],
+  ["font-family", "Inter, ui-sans-serif, system-ui, -apple-system, sans-serif"],
+] as const
 const UI_STYLE_MARKER = "data-agentation-shadow-style"
 const UI_STYLE_PATTERNS = [
   "packages/ui-vue/",
@@ -419,12 +424,22 @@ function ensureShadowRootContainer(
   rootId: string,
 ): HTMLDivElement {
   const existing = shadowRoot.getElementById(rootId)
-  if (existing instanceof HTMLDivElement) return existing
+  if (existing instanceof HTMLDivElement) {
+    applyShadowRootContainerBaseStyles(existing)
+    return existing
+  }
 
   const root = document.createElement("div")
   root.id = rootId
+  applyShadowRootContainerBaseStyles(root)
   shadowRoot.appendChild(root)
   return root
+}
+
+function applyShadowRootContainerBaseStyles(el: HTMLDivElement): void {
+  for (const [property, value] of SHADOW_ROOT_CONTAINER_BASE_STYLES) {
+    el.style.setProperty(property, value)
+  }
 }
 
 function syncUiStylesToShadowRoot(
