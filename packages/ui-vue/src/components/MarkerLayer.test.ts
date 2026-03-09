@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from "vitest"
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest"
 import { mount } from "@vue/test-utils"
+import { nextTick } from "vue"
 import MarkerLayer from "./MarkerLayer.vue"
 import { ANNOTATIONS_STORE_KEY, I18N_KEY, OVERLAY_KEY, SETTINGS_KEY } from "../injection-keys.js"
 import type { AnnotationsStore } from "../composables/useAnnotationsStore.js"
@@ -51,6 +52,19 @@ function makeProvides(annotations: any[] = []) {
 }
 
 describe("MarkerLayer", () => {
+  beforeEach(() => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback: FrameRequestCallback) => {
+      callback(0)
+      return 1
+    })
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ""
+    vi.restoreAllMocks()
+  })
+
   it("mounts with no markers when annotations is empty", () => {
     const { store, overlay, settings, i18n } = makeProvides([])
 
@@ -68,7 +82,13 @@ describe("MarkerLayer", () => {
     expect(wrapper.findAll(".marker-dot")).toHaveLength(0)
   })
 
-  it("renders markers for annotations with bounding boxes", () => {
+  it("renders markers for annotations with live element locators", () => {
+    const button = document.createElement("button")
+    button.id = "marker-basic"
+    button.textContent = "Open"
+    button.getBoundingClientRect = vi.fn(() => new DOMRect(100, 200, 80, 32))
+    document.body.appendChild(button)
+
     const annotations = [
       {
         id: "a1",
@@ -76,9 +96,18 @@ describe("MarkerLayer", () => {
         timestamp: new Date().toISOString(),
         url: "http://localhost/",
         elementSelector: "button",
+        elementText: "Open",
         comment: "Fix this",
         source: { framework: "vue", componentName: "App", file: "f", resolver: "r" },
-        metadata: { boundingBox: { x: 100, y: 200, width: 80, height: 40 } },
+        metadata: {
+          boundingBox: { x: 100, y: 200, width: 80, height: 32 },
+          elementLocator: {
+            selector: "#marker-basic",
+            tag: "button",
+            text: "Open",
+            position: { x: 100, y: 200, width: 80, height: 32 },
+          },
+        },
       },
     ]
 
@@ -97,21 +126,23 @@ describe("MarkerLayer", () => {
 
     expect(wrapper.findAll(".marker-dot")).toHaveLength(1)
     expect(wrapper.find(".marker-dot").text()).toBe("1")
+    expect(wrapper.find(".marker-wrapper").attributes("style")).toContain("left: 140px;")
+    expect(wrapper.find(".marker-wrapper").attributes("style")).toContain("top: 200px;")
   })
 
-  it("prefers relative marker positioning when markerXPercent is available", () => {
+  it("renders multi-select markers from the saved union bounding box", () => {
     const annotations = [
       {
         id: "a1",
         schemaVersion: 1,
         timestamp: new Date().toISOString(),
         url: "http://localhost/",
-        elementSelector: "button",
+        elementSelector: "multi-select",
         comment: "Fix this",
         source: { framework: "vue", componentName: "App", file: "f", resolver: "r" },
         metadata: {
           boundingBox: { x: 100, y: 200, width: 80, height: 40 },
-          markerXPercent: 50,
+          isMultiSelect: true,
         },
       },
     ]
@@ -129,6 +160,103 @@ describe("MarkerLayer", () => {
       },
     })
 
-    expect(wrapper.find(".marker-wrapper").attributes("style")).toContain("left: 50%;")
+    expect(wrapper.find(".marker-wrapper").attributes("style")).toContain("left: 140px;")
+    expect(wrapper.find(".marker-wrapper").attributes("style")).toContain("top: 200px;")
+  })
+
+  it("tracks the live DOM element like vibe-annotations", async () => {
+    const button = document.createElement("button")
+    button.id = "marker-target"
+    button.className = "cta-button"
+    button.textContent = "Save"
+    document.body.appendChild(button)
+
+    let rect = new DOMRect(120, 180, 80, 32)
+    button.getBoundingClientRect = vi.fn(() => rect)
+
+    const annotations = [
+      {
+        id: "a1",
+        schemaVersion: 1,
+        timestamp: new Date().toISOString(),
+        url: "http://localhost/",
+        elementSelector: "button",
+        elementText: "Save",
+        comment: "Fix this",
+        source: { framework: "vue", componentName: "App", file: "f", resolver: "r" },
+        metadata: {
+          boundingBox: { x: 120, y: 180, width: 80, height: 32 },
+          elementLocator: {
+            selector: "#marker-target",
+            tag: "button",
+            text: "Save",
+            classes: ["cta-button"],
+            position: { x: 120, y: 180, width: 80, height: 32 },
+          },
+        },
+      },
+    ]
+
+    const { store, overlay, settings, i18n } = makeProvides(annotations)
+
+    const wrapper = mount(MarkerLayer, {
+      global: {
+        provide: {
+          [ANNOTATIONS_STORE_KEY as symbol]: store,
+          [OVERLAY_KEY as symbol]: overlay,
+          [SETTINGS_KEY as symbol]: settings,
+          [I18N_KEY as symbol]: i18n,
+        },
+      },
+    })
+
+    expect(wrapper.find(".marker-wrapper").attributes("style")).toContain("left: 160px;")
+    expect(wrapper.find(".marker-wrapper").attributes("style")).toContain("top: 180px;")
+
+    rect = new DOMRect(260, 90, 120, 40)
+    window.dispatchEvent(new Event("resize"))
+    await nextTick()
+
+    expect(wrapper.find(".marker-wrapper").attributes("style")).toContain("left: 320px;")
+    expect(wrapper.find(".marker-wrapper").attributes("style")).toContain("top: 90px;")
+  })
+
+  it("hides single-element markers when the target can no longer be resolved", () => {
+    const annotations = [
+      {
+        id: "a1",
+        schemaVersion: 1,
+        timestamp: new Date().toISOString(),
+        url: "http://localhost/",
+        elementSelector: "button",
+        elementText: "Missing",
+        comment: "Fix this",
+        source: { framework: "vue", componentName: "App", file: "f", resolver: "r" },
+        metadata: {
+          boundingBox: { x: 100, y: 200, width: 80, height: 32 },
+          elementLocator: {
+            selector: "#does-not-exist",
+            tag: "button",
+            text: "Missing",
+            position: { x: 100, y: 200, width: 80, height: 32 },
+          },
+        },
+      },
+    ]
+
+    const { store, overlay, settings, i18n } = makeProvides(annotations)
+
+    const wrapper = mount(MarkerLayer, {
+      global: {
+        provide: {
+          [ANNOTATIONS_STORE_KEY as symbol]: store,
+          [OVERLAY_KEY as symbol]: overlay,
+          [SETTINGS_KEY as symbol]: settings,
+          [I18N_KEY as symbol]: i18n,
+        },
+      },
+    })
+
+    expect(wrapper.findAll(".marker-dot")).toHaveLength(0)
   })
 })

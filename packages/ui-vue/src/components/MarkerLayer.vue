@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue"
 import type { AnnotationV2 } from "@liuovo/agentation-vue-core"
+import { findAnnotationTarget } from "../annotation-target.js"
 import { ANNOTATIONS_STORE_KEY, I18N_KEY, OVERLAY_KEY, SETTINGS_KEY } from "../injection-keys.js"
 import { injectStrict } from "../utils.js"
 
@@ -15,7 +16,7 @@ interface MarkerPosition {
   id: string
   number: number
   top: number
-  left: string
+  left: number
   annotation: AnnotationV2
 }
 
@@ -26,6 +27,7 @@ const i18n = injectStrict(I18N_KEY, "i18n state")
 
 const hoveredId = ref<string | null>(null)
 const messages = computed(() => i18n.messages)
+const syncVersion = ref(0)
 
 const scroll = reactive({
   x: window.scrollX,
@@ -36,39 +38,106 @@ const showMarkers = computed(() => settings.showMarkers)
 const annotationColor = computed(() => settings.annotationColor || "#3c82f7")
 
 const markers = computed<MarkerPosition[]>(() => {
+  syncVersion.value
+
   return store.annotations
     .map((annotation, index) => {
-      const bb = getBoundingBox(annotation)
-      if (!bb) return null
+      const metadata = annotation.metadata as { isMultiSelect?: boolean } | undefined
 
-      const isFixed = (annotation.metadata as { isFixed?: boolean } | undefined)?.isFixed ?? false
-      const markerXPercent = getMarkerXPercent(annotation)
-      const fallbackLeft = isFixed ? bb.x + bb.width : bb.x + bb.width - scroll.x
+      if (metadata?.isMultiSelect) {
+        const bb = getBoundingBox(annotation)
+        if (!bb) return null
+
+        return {
+          id: annotation.id,
+          number: index + 1,
+          top: bb.y - scroll.y,
+          left: bb.x + bb.width / 2 - scroll.x,
+          annotation,
+        }
+      }
+
+      const liveTarget = findAnnotationTarget(annotation)
+      if (!liveTarget) return null
+
+      const liveRect = liveTarget.getBoundingClientRect()
 
       return {
         id: annotation.id,
         number: index + 1,
-        top: isFixed ? bb.y : bb.y - scroll.y,
-        left: markerXPercent === null ? `${fallbackLeft}px` : `${markerXPercent}%`,
+        top: liveRect.top,
+        left: liveRect.left + liveRect.width / 2,
         annotation,
       }
     })
     .filter((m): m is MarkerPosition => m !== null)
 })
 
+let syncFrame: number | null = null
+let resizeObserver: ResizeObserver | null = null
+let mutationObserver: MutationObserver | null = null
+
 onMounted(() => {
-  window.addEventListener("scroll", syncScroll, true)
-  window.addEventListener("resize", syncScroll)
+  window.addEventListener("scroll", scheduleLayoutSync, true)
+  window.addEventListener("resize", scheduleLayoutSync)
+  document.addEventListener("load", scheduleLayoutSync, true)
+  document.addEventListener("transitionend", scheduleLayoutSync, true)
+  document.addEventListener("animationend", scheduleLayoutSync, true)
+
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(() => scheduleLayoutSync())
+    resizeObserver.observe(document.documentElement)
+    if (document.body) {
+      resizeObserver.observe(document.body)
+    }
+  }
+
+  mutationObserver = new MutationObserver(() => scheduleLayoutSync())
+  mutationObserver.observe(document.documentElement, {
+    subtree: true,
+    childList: true,
+    characterData: true,
+  })
+  mutationObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["class", "style"],
+  })
+  if (document.body) {
+    mutationObserver.observe(document.body, {
+      attributes: true,
+      attributeFilter: ["class", "style"],
+    })
+  }
+
+  scheduleLayoutSync()
 })
 
 onUnmounted(() => {
-  window.removeEventListener("scroll", syncScroll, true)
-  window.removeEventListener("resize", syncScroll)
+  window.removeEventListener("scroll", scheduleLayoutSync, true)
+  window.removeEventListener("resize", scheduleLayoutSync)
+  document.removeEventListener("load", scheduleLayoutSync, true)
+  document.removeEventListener("transitionend", scheduleLayoutSync, true)
+  document.removeEventListener("animationend", scheduleLayoutSync, true)
+  resizeObserver?.disconnect()
+  mutationObserver?.disconnect()
+  if (syncFrame !== null) {
+    window.cancelAnimationFrame(syncFrame)
+  }
 })
 
-function syncScroll(): void {
+function scheduleLayoutSync(): void {
+  if (syncFrame !== null) return
+
+  syncFrame = window.requestAnimationFrame(() => {
+    syncFrame = null
+    syncLayout()
+  })
+}
+
+function syncLayout(): void {
   scroll.x = window.scrollX
   scroll.y = window.scrollY
+  syncVersion.value += 1
 }
 
 function onMarkerHover(id: string): void {
@@ -95,11 +164,6 @@ function truncate(text: string, max = 72): string {
 function getBoundingBox(annotation: AnnotationV2): BoundingBox | undefined {
   return (annotation.metadata as { boundingBox?: BoundingBox } | undefined)?.boundingBox
 }
-
-function getMarkerXPercent(annotation: AnnotationV2): number | null {
-  const value = (annotation.metadata as { markerXPercent?: unknown } | undefined)?.markerXPercent
-  return typeof value === "number" && Number.isFinite(value) ? value : null
-}
 </script>
 
 <template>
@@ -109,7 +173,7 @@ function getMarkerXPercent(annotation: AnnotationV2): number | null {
         v-for="marker in markers"
         :key="marker.id"
         class="marker-wrapper"
-        :style="{ top: `${marker.top}px`, left: marker.left }"
+        :style="{ top: `${marker.top}px`, left: `${marker.left}px` }"
       >
         <button
           class="marker-dot"

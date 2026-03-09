@@ -16,6 +16,7 @@ import type {
   ExportPageContext,
 } from "@liuovo/agentation-vue-core"
 import { reactive } from "vue"
+import { buildElementLocator } from "../annotation-target.js"
 import type { BoundingBox, RuntimeBridge, SelectionSnapshot } from "../types.js"
 
 // ---------------------------------------------------------------------------
@@ -65,8 +66,7 @@ export function createAnnotationsStore(bridge: RuntimeBridge): AnnotationsStore 
   function hydrate(): void {
     try {
       const loaded = bridge.storage.load()
-      const normalized = loaded.map(normalizeAnnotation)
-      state.annotations.splice(0, state.annotations.length, ...normalized)
+      state.annotations.splice(0, state.annotations.length, ...loaded)
     } catch {
       console.warn("[agentation] Failed to hydrate annotations from storage")
     }
@@ -222,7 +222,7 @@ function buildMetadata(snapshot: SelectionSnapshot): Record<string, unknown> {
     fullPath: getFullElementPath(element) || undefined,
     cssClasses: getElementClasses(element) || undefined,
     boundingBox,
-    markerXPercent: getMarkerXPercent(rect),
+    elementLocator: isMultiSelect ? undefined : buildElementLocator(element),
     nearbyText: getNearbyText(element) || undefined,
     nearbyElements: getNearbyElements(element) || undefined,
     computedStyles: getForensicComputedStyles(element) || undefined,
@@ -244,41 +244,6 @@ function toDocumentBox(rect: DOMRectReadOnly, isFixed: boolean): BoundingBox {
     y: isFixed ? rect.top : rect.top + window.scrollY,
     width: rect.width,
     height: rect.height,
-  }
-}
-
-function getMarkerXPercent(rect: DOMRectReadOnly): number | undefined {
-  if (typeof window === "undefined" || window.innerWidth <= 0) return undefined
-  const anchorX = rect.left + rect.width
-  const clamped = Math.max(0, Math.min(window.innerWidth, anchorX))
-  return Number(((clamped / window.innerWidth) * 100).toFixed(4))
-}
-
-function getMarkerXPercentFromBox(box: BoundingBox): number | undefined {
-  if (typeof window === "undefined" || window.innerWidth <= 0) return undefined
-  const anchorX = box.x + box.width
-  const clamped = Math.max(0, Math.min(window.innerWidth, anchorX))
-  return Number(((clamped / window.innerWidth) * 100).toFixed(4))
-}
-
-function normalizeAnnotation(annotation: AnnotationV2): AnnotationV2 {
-  const metadata = annotation.metadata as { boundingBox?: BoundingBox, markerXPercent?: unknown } | undefined
-  if (!metadata?.boundingBox || typeof metadata.markerXPercent === "number") {
-    return annotation
-  }
-
-  const markerXPercent = getMarkerXPercentFromBox(metadata.boundingBox)
-
-  if (markerXPercent === undefined) {
-    return annotation
-  }
-
-  return {
-    ...annotation,
-    metadata: {
-      ...metadata,
-      markerXPercent,
-    },
   }
 }
 

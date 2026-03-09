@@ -135,8 +135,7 @@ export function runAgentationRuntime(options: ResolvedAgentationVueOptions): voi
       areaSelection.clear()
       selection.clearHovered()
       selection.clearSelection()
-      infra.appRoot.replaceChildren()
-      infra.overlayRoot.replaceChildren()
+      infra.cleanup()
       delete window.__agentationDemo
     },
   }

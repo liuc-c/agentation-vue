@@ -84,33 +84,15 @@ describe("createAnnotationsStore", () => {
     expect(store.annotations[0].id).toBe("x")
   })
 
-  it("adds a relative marker anchor when hydrating legacy annotations", () => {
-    const existing = [{
-      id: "x",
-      schemaVersion: 1 as const,
-      timestamp: new Date().toISOString(),
-      url: "http://localhost/",
-      elementSelector: "div",
-      comment: "test",
-      source: { framework: "vue" as const, componentName: "App", file: "f", resolver: "r" },
-      metadata: {
-        boundingBox: { x: 100, y: 200, width: 80, height: 40 },
-      },
-    }]
-    ;(bridge.storage.load as any).mockReturnValue(existing)
-
-    const store = createAnnotationsStore(bridge)
-    store.hydrate()
-
-    expect((store.annotations[0].metadata as { markerXPercent?: number }).markerXPercent).toBeTypeOf("number")
-  })
-
   it("saves annotation", () => {
     const store = createAnnotationsStore(bridge)
     const snap = makeSnapshot()
     const annotation = store.saveAnnotation("Fix this", snap)
 
     expect(annotation.comment).toBe("Fix this")
+    expect((annotation.metadata as { elementLocator?: { tag?: string } }).elementLocator).toMatchObject({
+      tag: "button",
+    })
     expect(store.annotations).toHaveLength(1)
     expect(bridge.storage.save).toHaveBeenCalled()
     expect(bridge.sync!.enqueueUpsert).toHaveBeenCalled()

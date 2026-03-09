@@ -75,8 +75,20 @@ export const originalSetInterval = _s.origSetInterval
 // ---------------------------------------------------------------------------
 
 function isAgentationElement(el: Element | null): boolean {
-  if (!el) return false
-  return EXCLUDE_SELECTORS.some((selector) => !!el.closest?.(selector))
+  let current: Element | null = el
+
+  while (current) {
+    if (EXCLUDE_SELECTORS.some((selector) => current?.matches?.(selector) || current?.closest?.(selector))) {
+      return true
+    }
+
+    const root = current.getRootNode()
+    current = root instanceof ShadowRoot
+      ? root.host
+      : current.parentElement
+  }
+
+  return false
 }
 
 export function freeze(): void {

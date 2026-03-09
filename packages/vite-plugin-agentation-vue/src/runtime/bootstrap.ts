@@ -25,7 +25,26 @@ import { resolveElementSource } from "./resolver/index.js"
 
 const APP_CONTAINER_ID = "agentation-app"
 const OVERLAY_CONTAINER_ID = "agentation-overlay"
+const APP_ROOT_ID = "agentation-app-root"
+const OVERLAY_ROOT_ID = "agentation-overlay-root"
 const OWN_SELECTOR = `#${APP_CONTAINER_ID}, #${OVERLAY_CONTAINER_ID}`
+const CONTAINER_BASE_STYLES = [
+  ["display", "block"],
+  ["position", "fixed"],
+  ["inset", "0"],
+  ["margin", "0"],
+  ["padding", "0"],
+  ["border", "0"],
+  ["overflow", "visible"],
+  ["pointer-events", "none"],
+  ["background", "none"],
+] as const
+const UI_STYLE_MARKER = "data-agentation-shadow-style"
+const UI_STYLE_PATTERNS = [
+  "packages/ui-vue/",
+  "agentation-vue-ui/",
+  "agentation-vue-ui\\",
+] as const
 
 /** Minimum drag distance (px) before area selection activates. */
 const DRAG_THRESHOLD = 20
@@ -51,6 +70,7 @@ export interface RuntimeInfrastructure {
   overlayRoot: HTMLDivElement
   storage: AgentationStorageBridge
   resolveSource(el: HTMLElement): SourceLocation | null
+  cleanup(): void
 }
 
 /**
@@ -60,8 +80,8 @@ export interface RuntimeInfrastructure {
 export function setupInfrastructure(
   storagePrefix: string,
 ): RuntimeInfrastructure {
-  const appRoot = ensureContainer(APP_CONTAINER_ID)
-  const overlayRoot = ensureContainer(OVERLAY_CONTAINER_ID)
+  const appMount = ensureShadowMount(APP_CONTAINER_ID, APP_ROOT_ID, "100000")
+  const overlayMount = ensureShadowMount(OVERLAY_CONTAINER_ID, OVERLAY_ROOT_ID, "99999")
   const storage = createStorageBridge(storagePrefix)
 
   function resolveSource(el: HTMLElement): SourceLocation | null {
@@ -72,7 +92,16 @@ export function setupInfrastructure(
     }
   }
 
-  return { appRoot, overlayRoot, storage, resolveSource }
+  return {
+    appRoot: appMount.root,
+    overlayRoot: overlayMount.root,
+    storage,
+    resolveSource,
+    cleanup() {
+      appMount.cleanup()
+      overlayMount.cleanup()
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -335,12 +364,40 @@ export function attachListeners(
 // DOM helpers
 // ---------------------------------------------------------------------------
 
-function ensureContainer(id: string): HTMLDivElement {
+function ensureShadowMount(
+  hostId: string,
+  rootId: string,
+  zIndex: string,
+): {
+  host: HTMLDivElement
+  root: HTMLDivElement
+  cleanup(): void
+} {
+  const host = ensureContainer(hostId, zIndex)
+  const shadowRoot = host.shadowRoot ?? host.attachShadow({ mode: "open" })
+  const root = ensureShadowRootContainer(shadowRoot, rootId)
+  const stopSync = syncUiStylesToShadowRoot(shadowRoot, root)
+
+  return {
+    host,
+    root,
+    cleanup() {
+      stopSync()
+      shadowRoot.replaceChildren()
+    },
+  }
+}
+
+function ensureContainer(id: string, zIndex: string): HTMLDivElement {
   const existing = document.getElementById(id)
-  if (existing instanceof HTMLDivElement) return existing
+  if (existing instanceof HTMLDivElement) {
+    applyContainerBaseStyles(existing, zIndex)
+    return existing
+  }
 
   const el = document.createElement("div")
   el.id = id
+  applyContainerBaseStyles(el, zIndex)
 
   if (existing) {
     existing.replaceWith(el)
@@ -348,6 +405,78 @@ function ensureContainer(id: string): HTMLDivElement {
     document.body.appendChild(el)
   }
   return el
+}
+
+function applyContainerBaseStyles(el: HTMLDivElement, zIndex: string): void {
+  for (const [property, value] of CONTAINER_BASE_STYLES) {
+    el.style.setProperty(property, value)
+  }
+  el.style.setProperty("z-index", zIndex)
+}
+
+function ensureShadowRootContainer(
+  shadowRoot: ShadowRoot,
+  rootId: string,
+): HTMLDivElement {
+  const existing = shadowRoot.getElementById(rootId)
+  if (existing instanceof HTMLDivElement) return existing
+
+  const root = document.createElement("div")
+  root.id = rootId
+  shadowRoot.appendChild(root)
+  return root
+}
+
+function syncUiStylesToShadowRoot(
+  shadowRoot: ShadowRoot,
+  root: HTMLDivElement,
+): () => void {
+  const sync = () => {
+    shadowRoot.querySelectorAll(`[${UI_STYLE_MARKER}]`).forEach((node) => {
+      node.remove()
+    })
+
+    for (const node of getUiStyleNodes()) {
+      const clone = node.cloneNode(true) as HTMLStyleElement | HTMLLinkElement
+      clone.setAttribute(UI_STYLE_MARKER, "")
+      shadowRoot.insertBefore(clone, root)
+    }
+  }
+
+  sync()
+
+  const observer = new MutationObserver(() => {
+    sync()
+  })
+
+  observer.observe(document.head, {
+    subtree: true,
+    childList: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ["data-vite-dev-id", "href", "media", "disabled"],
+  })
+
+  return () => {
+    observer.disconnect()
+  }
+}
+
+function getUiStyleNodes(): Array<HTMLStyleElement | HTMLLinkElement> {
+  return Array.from(document.head.querySelectorAll<HTMLStyleElement | HTMLLinkElement>("style, link[rel=\"stylesheet\"]"))
+    .filter((node) => isUiStyleNode(node))
+}
+
+function isUiStyleNode(node: HTMLStyleElement | HTMLLinkElement): boolean {
+  if (node instanceof HTMLStyleElement) {
+    return matchesUiStyleId(node.dataset.viteDevId ?? "")
+  }
+
+  return matchesUiStyleId(node.getAttribute("href") ?? "")
+}
+
+function matchesUiStyleId(value: string): boolean {
+  return UI_STYLE_PATTERNS.some((pattern) => value.includes(pattern))
 }
 
 function asInspectable(target: EventTarget | null): HTMLElement | null {
