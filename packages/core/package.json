@@ -1,6 +1,6 @@
 {
   "name": "@liuovo/agentation-vue-core",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Framework-agnostic core: types, DOM identification, storage, transport, export",
   "license": "PolyForm-Shield-1.0.0",
   "type": "module",
