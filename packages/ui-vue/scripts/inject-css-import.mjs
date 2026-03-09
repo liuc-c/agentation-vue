@@ -1,4 +1,4 @@
-import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
@@ -55,6 +55,10 @@ export function injectBuiltStyleHref(source, cssPath = "./index.raw.css") {
   )
 }
 
+export function protectCssPixels(cssText) {
+  return cssText.replace(/(-?\d*\.?\d+)px\b/g, "$1PX")
+}
+
 export function patchBuiltEntry(
   entryFile = resolve(import.meta.dirname, "../dist/index.js"),
   cssFile = resolve(import.meta.dirname, "../dist/index.css"),
@@ -68,8 +72,9 @@ export function patchBuiltEntry(
   }
 
   const source = readFileSync(entryFile, "utf8")
+  const cssText = readFileSync(cssFile, "utf8")
   const patched = injectBuiltStyleHref(injectCssImportIntoChunk(source))
-  cpSync(cssFile, rawCssFile)
+  writeFileSync(rawCssFile, protectCssPixels(cssText))
 
   if (patched !== source) {
     writeFileSync(entryFile, patched)

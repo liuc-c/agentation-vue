@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it } from "vitest"
-import { injectBuiltStyleHref, injectCssImportIntoChunk } from "./inject-css-import.mjs"
+import { injectBuiltStyleHref, injectCssImportIntoChunk, protectCssPixels } from "./inject-css-import.mjs"
 
 describe("injectCssImportIntoChunk", () => {
   it("injects the built stylesheet before the sourcemap comment", () => {
@@ -68,6 +68,12 @@ describe("injectCssImportIntoChunk", () => {
 
     expect(injectBuiltStyleHref(source)).toContain(
       'Hs = new URL("./index.raw.css", import.meta.url).href;',
+    )
+  })
+
+  it("uppercases px units in the protected css copy", () => {
+    expect(protectCssPixels("font-size: 16px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);")).toBe(
+      "font-size: 16PX; box-shadow: 0 12PX 32PX rgba(0, 0, 0, 0.2);",
     )
   })
 })
