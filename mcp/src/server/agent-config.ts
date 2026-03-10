@@ -2,9 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path"
 import { homedir } from "node:os"
 import {
-  getConfiguredRegistryUrl,
-  readRegistryCache,
-  type AgentRegistryConfigShape,
+  readEmbeddedRegistryManifest,
 } from "./registry/index.js"
 
 export type AgentKind = string
@@ -49,7 +47,7 @@ export interface LocalAgentOverride {
   installHint?: string
 }
 
-export interface AgentConfigFile extends AgentRegistryConfigShape {
+export interface AgentConfigFile {
   defaultAgentId?: string
   agents: LocalAgentOverride[]
 }
@@ -63,10 +61,11 @@ export interface ResolvedAgentConfig extends LocalAgentConfig {
 
 export interface AgentCatalog {
   configPath: string
-  registryUrl?: string
   defaultAgentId?: string
   agents: ResolvedAgentConfig[]
-  source: "registry" | "embedded" | "cache"
+  source: "snapshot"
+  snapshotGeneratedAt?: string
+  snapshotSource?: string
 }
 
 const CONFIG_DIR = resolve(homedir(), ".agentation")
@@ -129,7 +128,6 @@ function loadConfigFile(configPath: string): AgentConfigFile | null {
   if (!existsSync(configPath)) return null
 
   const parsed = JSON.parse(readFileSync(configPath, "utf8")) as {
-    registryUrl?: unknown
     defaultAgentId?: unknown
     agents?: unknown
   }
@@ -139,7 +137,6 @@ function loadConfigFile(configPath: string): AgentConfigFile | null {
     : []
 
   return {
-    registryUrl: typeof parsed.registryUrl === "string" ? parsed.registryUrl.trim() || undefined : undefined,
     defaultAgentId: typeof parsed.defaultAgentId === "string" ? parsed.defaultAgentId.trim() || undefined : undefined,
     agents,
   }
@@ -216,8 +213,8 @@ function resolveConfigAgent(agent: LocalAgentConfig): ResolvedAgentConfig {
   }
 }
 
-function resolveFromRegistry(configPath: string, config: AgentConfigFile | null): AgentCatalog {
-  const registry = readRegistryCache()
+function resolveFromSnapshot(configPath: string, config: AgentConfigFile | null): AgentCatalog {
+  const registry = readEmbeddedRegistryManifest()
   const overrideById = new Map((config?.agents ?? []).map((agent) => [agent.id, agent]))
   const registryAgents = registry.agents.map((agent) =>
     resolveConfigAgent(mergeAgentConfig({
@@ -269,20 +266,21 @@ function resolveFromRegistry(configPath: string, config: AgentConfigFile | null)
 
   return {
     configPath,
-    registryUrl: getConfiguredRegistryUrl(config),
     defaultAgentId,
     agents,
-    source: registry.source === "embedded" ? "embedded" : registry.source ? "cache" : "registry",
+    source: "snapshot",
+    snapshotGeneratedAt: registry.generatedAt,
+    snapshotSource: registry.source,
   }
 }
 
 export function loadAgentCatalog(configPath = getAgentConfigPath()): AgentCatalog {
   try {
     const config = loadConfigFile(configPath)
-    return resolveFromRegistry(configPath, config)
+    return resolveFromSnapshot(configPath, config)
   } catch (error) {
     process.stderr.write(`[Agents] Failed to parse ${configPath}: ${(error as Error).message}\n`)
-    return resolveFromRegistry(configPath, null)
+    return resolveFromSnapshot(configPath, null)
   }
 }
 
@@ -297,7 +295,6 @@ export function writeAgentCatalogConfig(
   ensureAgentConfigDir(configPath)
 
   writeFileSync(configPath, `${JSON.stringify({
-    registryUrl: catalog.registryUrl,
     defaultAgentId: catalog.defaultAgentId,
     agents: catalog.agents.map((agent) => ({
       id: agent.id,

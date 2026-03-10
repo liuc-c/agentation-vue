@@ -1,0 +1,336 @@
+{
+  "version": 1,
+  "generatedAt": "2026-03-10T08:31:36.514Z",
+  "source": "https://github.com/agentclientprotocol/registry",
+  "agents": [
+    {
+      "id": "auggie",
+      "label": "Auggie CLI",
+      "kind": "auggie",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@augmentcode/auggie@0.18.1",
+        "--acp"
+      ],
+      "env": [
+        {
+          "name": "AUGMENT_DISABLE_AUTO_UPDATE",
+          "value": "1"
+        }
+      ],
+      "transport": "stdio",
+      "description": "Augment Code's powerful software agent, backed by industry-leading context engine",
+      "homepage": "https://github.com/augmentcode/auggie-zed-extension",
+      "installHint": "Runs via npx -y @augmentcode/auggie@0.18.1 --acp."
+    },
+    {
+      "id": "autohand",
+      "label": "Autohand Code",
+      "kind": "autohand",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@autohandai/autohand-acp@0.2.1"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "Autohand Code - AI coding agent powered by Autohand AI",
+      "homepage": "https://github.com/autohandai/autohand-acp",
+      "installHint": "Runs via npx -y @autohandai/autohand-acp@0.2.1."
+    },
+    {
+      "id": "claude-acp",
+      "label": "Claude Agent",
+      "kind": "claude",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@zed-industries/claude-agent-acp@0.21.0"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "icon": "vscode-icons:file-type-claude",
+      "description": "ACP wrapper for Anthropic's Claude",
+      "homepage": "https://github.com/zed-industries/claude-agent-acp",
+      "installHint": "Runs via npx -y @zed-industries/claude-agent-acp@0.21.0."
+    },
+    {
+      "id": "cline",
+      "label": "Cline",
+      "kind": "cline",
+      "command": "npx",
+      "args": [
+        "-y",
+        "cline@2.6.1",
+        "--acp"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "Autonomous coding agent CLI - capable of creating/editing files, running commands, using the browser, and more",
+      "homepage": "https://github.com/cline/cline",
+      "installHint": "Runs via npx -y cline@2.6.1 --acp."
+    },
+    {
+      "id": "codebuddy-code",
+      "label": "Codebuddy Code",
+      "kind": "codebuddy-code",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@tencent-ai/codebuddy-code@2.56.1",
+        "--acp"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "Tencent Cloud's official intelligent coding tool",
+      "homepage": "https://www.codebuddy.cn/cli/",
+      "installHint": "Runs via npx -y @tencent-ai/codebuddy-code@2.56.1 --acp."
+    },
+    {
+      "id": "codex-acp",
+      "label": "Codex CLI",
+      "kind": "codex",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@zed-industries/codex-acp@0.9.5"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "ACP adapter for OpenAI's coding assistant",
+      "homepage": "https://github.com/zed-industries/codex-acp",
+      "installHint": "Runs via npx -y @zed-industries/codex-acp@0.9.5."
+    },
+    {
+      "id": "crow-cli",
+      "label": "crow-cli",
+      "kind": "crow-cli",
+      "command": "uvx",
+      "args": [
+        "crow-cli",
+        "acp"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "Minimal ACP Native Coding Agent",
+      "homepage": "https://github.com/crow-cli/crow-cli",
+      "installHint": "Runs via uvx crow-cli acp."
+    },
+    {
+      "id": "dimcode",
+      "label": "DimCode",
+      "kind": "dimcode",
+      "command": "npx",
+      "args": [
+        "-y",
+        "dimcode@0.0.16",
+        "acp"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "A coding agent that puts leading models at your command.",
+      "installHint": "Runs via npx -y dimcode@0.0.16 acp."
+    },
+    {
+      "id": "factory-droid",
+      "label": "Factory Droid",
+      "kind": "factory-droid",
+      "command": "npx",
+      "args": [
+        "-y",
+        "droid@0.71.0",
+        "exec",
+        "--output-format",
+        "acp"
+      ],
+      "env": [
+        {
+          "name": "DROID_DISABLE_AUTO_UPDATE",
+          "value": "true"
+        },
+        {
+          "name": "FACTORY_DROID_AUTO_UPDATE_ENABLED",
+          "value": "false"
+        }
+      ],
+      "transport": "stdio",
+      "description": "Factory Droid - AI coding agent powered by Factory AI",
+      "installHint": "Runs via npx -y droid@0.71.0 exec --output-format acp."
+    },
+    {
+      "id": "fast-agent",
+      "label": "fast-agent",
+      "kind": "fast-agent",
+      "command": "uvx",
+      "args": [
+        "fast-agent-acp==0.5.9",
+        "-x"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "Code and build agents with comprehensive multi-provider support",
+      "homepage": "https://github.com/evalstate/fast-agent",
+      "installHint": "Runs via uvx fast-agent-acp==0.5.9 -x."
+    },
+    {
+      "id": "gemini",
+      "label": "Gemini CLI",
+      "kind": "gemini",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@google/gemini-cli@0.32.1",
+        "--experimental-acp"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "icon": "vscode-icons:file-type-gemini",
+      "description": "Google's official CLI for Gemini",
+      "homepage": "https://github.com/google-gemini/gemini-cli",
+      "installHint": "Runs via npx -y @google/gemini-cli@0.32.1 --experimental-acp."
+    },
+    {
+      "id": "github-copilot",
+      "label": "GitHub Copilot",
+      "kind": "github-copilot",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@github/copilot-language-server@1.449.0",
+        "--acp"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "GitHub's AI pair programmer",
+      "homepage": "https://github.com/github/copilot-language-server-release",
+      "installHint": "Runs via npx -y @github/copilot-language-server@1.449.0 --acp."
+    },
+    {
+      "id": "github-copilot-cli",
+      "label": "GitHub Copilot",
+      "kind": "github-copilot-cli",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@github/copilot@1.0.3",
+        "--acp"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "GitHub's AI pair programmer",
+      "homepage": "https://github.com/github/copilot-cli",
+      "installHint": "Runs via npx -y @github/copilot@1.0.3 --acp."
+    },
+    {
+      "id": "junie",
+      "label": "Junie",
+      "kind": "junie",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@jetbrains/junie@888.180.0",
+        "--acp=true"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "AI Coding Agent by JetBrains",
+      "homepage": "https://github.com/JetBrains/junie",
+      "installHint": "Runs via npx -y @jetbrains/junie@888.180.0 --acp=true."
+    },
+    {
+      "id": "kilo",
+      "label": "Kilo",
+      "kind": "kilo",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@kilocode/cli@7.0.40",
+        "acp"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "The open source coding agent",
+      "homepage": "https://github.com/Kilo-Org/kilocode",
+      "installHint": "Runs via npx -y @kilocode/cli@7.0.40 acp."
+    },
+    {
+      "id": "minion-code",
+      "label": "Minion Code",
+      "kind": "minion-code",
+      "command": "uvx",
+      "args": [
+        "minion-code@0.1.39",
+        "acp"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "An enhanced AI code assistant built on the Minion framework with rich development tools",
+      "homepage": "https://github.com/femto/minion-code",
+      "installHint": "Runs via uvx minion-code@0.1.39 acp."
+    },
+    {
+      "id": "nova",
+      "label": "Nova",
+      "kind": "nova",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@compass-ai/nova@1.0.75",
+        "acp"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "Nova by Compass AI - a fully-fledged software engineer at your command",
+      "homepage": "https://github.com/Compass-Agentic-Platform/nova",
+      "installHint": "Runs via npx -y @compass-ai/nova@1.0.75 acp."
+    },
+    {
+      "id": "pi-acp",
+      "label": "pi ACP",
+      "kind": "pi",
+      "command": "npx",
+      "args": [
+        "-y",
+        "pi-acp@0.0.22"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "ACP adapter for pi coding agent",
+      "homepage": "https://github.com/svkozak/pi-acp",
+      "installHint": "Runs via npx -y pi-acp@0.0.22."
+    },
+    {
+      "id": "qoder",
+      "label": "Qoder CLI",
+      "kind": "qoder",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@qoder-ai/qodercli@0.1.30",
+        "--acp"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "AI coding assistant with agentic capabilities",
+      "installHint": "Runs via npx -y @qoder-ai/qodercli@0.1.30 --acp."
+    },
+    {
+      "id": "qwen-code",
+      "label": "Qwen Code",
+      "kind": "qwen-code",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@qwen-code/qwen-code@0.12.0",
+        "--acp",
+        "--experimental-skills"
+      ],
+      "env": [],
+      "transport": "stdio",
+      "description": "Alibaba's Qwen coding assistant",
+      "homepage": "https://github.com/QwenLM/qwen-code",
+      "installHint": "Runs via npx -y @qwen-code/qwen-code@0.12.0 --acp --experimental-skills."
+    }
+  ]
+}

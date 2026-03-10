@@ -42,9 +42,11 @@
     "watch": "tsup --watch",
     "dev": "pnpm build && pnpm watch",
     "start": "pnpm build && node dist/cli.js server",
+    "update-registry-snapshot": "node scripts/update-registry-snapshot.mjs",
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^0.15.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "better-sqlite3": "^12.6.2",
     "zod": "^3.23.0"

@@ -9,7 +9,7 @@
 export { startHttpServer, startMcpHttpServer, startMcpServer } from "./server/index.js";
 export { AgentManager } from "./server/agent-manager.js";
 export { loadAgentCatalog, getAgentConfigPath, writeAgentCatalogConfig } from "./server/agent-config.js";
-export { refreshRegistryCache, getAgentRegistryCachePath } from "./server/registry/index.js";
+export { readEmbeddedRegistryManifest } from "./server/registry/index.js";
 export type { AgentKind, AgentStatus, LocalAgentConfig, ResolvedAgentConfig } from "./server/agent-config.js";
 export type { AgentRegistryManifest, RegistryAgentDefinition } from "./server/registry/types.js";
 
@@ -30,6 +30,18 @@ export {
   getPendingAnnotations,
   getSessionAnnotations,
   deleteAnnotation,
+  getSessionWithAnnotationsV2,
+  addAnnotationV2,
+  getAnnotationV2,
+  updateAnnotationV2,
+  updateAnnotationV2Status,
+  claimAnnotationV2,
+  releaseAnnotationV2,
+  requeueExpiredProcessingAnnotationsV2,
+  addThreadMessageV2,
+  getPendingAnnotationsV2,
+  getSessionAnnotationsV2,
+  deleteAnnotationV2,
   getEventsSince,
   clearAll,
 } from "./server/store.js";
@@ -70,6 +82,8 @@ export type {
   AnnotationIntent,
   AnnotationSeverity,
   AnnotationStatus,
+  AnnotationClaim,
+  AnnotationClaimOwner,
   Session,
   SessionStatus,
   SessionWithAnnotations,

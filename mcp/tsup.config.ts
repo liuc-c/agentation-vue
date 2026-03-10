@@ -14,7 +14,7 @@ export default defineConfig([
     splitting: false,
     sourcemap: true,
     clean: true,
-    external: ["@modelcontextprotocol/sdk", "zod", "better-sqlite3"],
+    external: ["@agentclientprotocol/sdk", "@modelcontextprotocol/sdk", "zod", "better-sqlite3"],
     define: {
       __VERSION__: JSON.stringify(VERSION),
     },
@@ -27,7 +27,7 @@ export default defineConfig([
     splitting: false,
     sourcemap: true,
     clean: false,
-    external: ["@modelcontextprotocol/sdk", "zod", "better-sqlite3"],
+    external: ["@agentclientprotocol/sdk", "@modelcontextprotocol/sdk", "zod", "better-sqlite3"],
     define: {
       __VERSION__: JSON.stringify(VERSION),
     },

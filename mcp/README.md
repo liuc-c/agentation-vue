@@ -36,7 +36,21 @@ agentation-vue-mcp agents init
 agentation-vue-mcp agents doctor
 ```
 
-This writes `~/.agentation/agents.json` and probes local ACP-compatible agent commands.
+This writes `~/.agentation/agents.json` from the embedded ACP registry snapshot and probes local ACP-compatible agent commands.
+
+### 2.1 Update the embedded ACP snapshot locally
+
+Runtime discovery is snapshot-only. To refresh the embedded agent catalog, update the snapshot in this repository and rebuild:
+
+```bash
+pnpm --filter agentation-vue-mcp update-registry-snapshot
+```
+
+To generate from a local clone of the upstream registry instead of the CDN index:
+
+```bash
+pnpm --filter agentation-vue-mcp update-registry-snapshot -- --source /path/to/agentclientprotocol-registry --source-label https://github.com/agentclientprotocol/registry
+```
 
 ### 3. Add MCP tools to your agent
 

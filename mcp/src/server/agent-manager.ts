@@ -1,13 +1,16 @@
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   filterSessionsByProject,
 } from "./project-scope.js";
 import {
+  claimAnnotationV2,
+  releaseAnnotationV2,
+  requeueExpiredProcessingAnnotationsV2,
   getPendingAnnotationsV2,
   getSession,
-  getSessionWithAnnotationsV2,
   listSessions,
 } from "./store.js";
 import {
@@ -18,10 +21,10 @@ import {
   type ResolvedAgentConfig,
 } from "./agent-config.js";
 import {
-  AcpClient,
+  AcpRuntime,
   type AcpInitializeResult,
   type McpServerConfig,
-} from "./acp-client.js";
+} from "./acp-runtime.js";
 import type { AnnotationV2, Session } from "../types.js";
 
 export interface AgentSummary {
@@ -42,9 +45,11 @@ export interface AgentSummary {
 export interface AgentDispatchState {
   projectId: string;
   agentId?: string;
+  runId?: string;
   mode: "auto" | "manual";
   trigger: "annotation.upsert" | "manual.send";
   state: "idle" | "sending" | "succeeded" | "failed" | "cancelled" | "skipped";
+  claimedCount?: number;
   message?: string;
   updatedAt: string;
 }
@@ -67,7 +72,7 @@ export interface AgentManagerOptions {
 
 interface AgentRuntime {
   config: ResolvedAgentConfig
-  client: AcpClient
+  client: AcpRuntime
   sessionId?: string
   initialized: boolean
   capabilities?: AcpInitializeResult["agentCapabilities"]
@@ -77,12 +82,17 @@ interface AgentRuntime {
   disposeUpdateSubscription?: () => void
 }
 
-function nowIso(): string {
-  return new Date().toISOString();
+interface PendingDispatchRun {
+  runId: string
+  agentId: string
+  annotationIds: string[]
+  cancelRequested: boolean
 }
 
-function isLoadSessionSupported(capabilities: AcpInitializeResult["agentCapabilities"] | undefined): boolean {
-  return Boolean(capabilities?.loadSession);
+const PROCESSING_TTL_SECONDS = 600
+
+function nowIso(): string {
+  return new Date().toISOString();
 }
 
 function truncateMessage(value: string | undefined, limit = 280): string | undefined {
@@ -100,19 +110,37 @@ function getProjectRootFromSession(session: Session | undefined): string | undef
     : undefined;
 }
 
-function resolveMcpCliPath(): string {
-  const argvCli = process.argv[1] ? resolve(process.argv[1]) : null;
-  const currentDir = typeof __dirname === "string"
-    ? __dirname
-    : argvCli
-      ? dirname(argvCli)
-      : resolve(process.cwd(), "mcp", "src", "server");
+function isDispatchableSession(session: Pick<Session, "status">): boolean {
+  return session.status !== "closed";
+}
+
+export function resolveMcpCliPath(options: {
+  argvCli?: string | null;
+  currentDir?: string | null;
+  cwd?: string;
+} = {}): string {
+  const cwd = options.cwd ? resolve(options.cwd) : process.cwd();
+  const argvCli = Object.prototype.hasOwnProperty.call(options, "argvCli")
+    ? (options.argvCli ? resolve(options.argvCli) : null)
+    : process.argv[1]
+      ? resolve(process.argv[1])
+      : null;
+  const currentDir = Object.prototype.hasOwnProperty.call(options, "currentDir")
+    ? (options.currentDir ? resolve(options.currentDir) : resolve(cwd, "mcp", "src", "server"))
+    : typeof __dirname === "string"
+      ? __dirname
+      : argvCli
+        ? dirname(argvCli)
+        : resolve(cwd, "mcp", "src", "server");
   const candidates = [
+    argvCli,
+    resolve(currentDir, "cli.js"),
+    resolve(currentDir, "cli.ts"),
     resolve(currentDir, "../cli.js"),
     resolve(currentDir, "../cli.ts"),
-    resolve(process.cwd(), "mcp", "dist", "cli.js"),
-    resolve(process.cwd(), "mcp", "src", "cli.ts"),
-  ];
+    resolve(cwd, "mcp", "dist", "cli.js"),
+    resolve(cwd, "mcp", "src", "cli.ts"),
+  ].filter((candidate): candidate is string => Boolean(candidate));
 
   const match = candidates.find((candidate) => existsSync(candidate));
   if (!match) {
@@ -139,6 +167,8 @@ function buildMcpServerConfig(httpBaseUrl: string): McpServerConfig {
 
 function buildPrompt(input: {
   projectId: string;
+  agentId: string;
+  runId: string;
   mode: "auto" | "manual";
   trigger: "annotation.upsert" | "manual.send";
   annotations: AnnotationV2[];
@@ -170,24 +200,27 @@ function buildPrompt(input: {
 
   return [
     "You are handling Agentation visual annotations for a local project.",
-    "Use the provided Agentation MCP tools to inspect, acknowledge, and resolve the work.",
+    "Use the provided Agentation MCP tools to inspect, resolve, dismiss, or release the claimed work.",
     "Recommended workflow:",
-    "1. Read the relevant context with agentation_v2_get_session or agentation_v2_get_pending.",
-    "2. Mark each item acknowledged before you start working.",
+    "1. These annotations are already claimed for this run and marked as processing.",
+    "2. Read the relevant context with agentation_v2_get_session if you need more detail.",
     "3. Make the requested code changes in the project working directory.",
     "4. Resolve each annotation with a short summary when done.",
+    "5. If you abandon an item, release or dismiss it instead of leaving it processing.",
     "",
     `Project: ${input.projectId}`,
+    `Agent: ${input.agentId}`,
+    `Run ID: ${input.runId}`,
     `Mode: ${input.mode}`,
     `Trigger: ${input.trigger}`,
     "",
     "Sessions in scope:",
     sessionSummary || "- none",
     "",
-    "Pending annotations:",
+    "Claimed annotations for this run:",
     annotationSummary,
     "",
-    "Raw pending annotations JSON:",
+    "Raw claimed annotations JSON:",
     JSON.stringify(input.annotations, null, 2),
   ].join("\n");
 }
@@ -200,6 +233,7 @@ export class AgentManager {
   private readonly activeAgentByProject = new Map<string, string>();
   private readonly runtimes = new Map<string, AgentRuntime>();
   private readonly dispatchStateByProject = new Map<string, AgentDispatchState>();
+  private readonly activeDispatchRunByProject = new Map<string, PendingDispatchRun>();
 
   private catalog: AgentCatalog | null = null;
 
@@ -291,6 +325,42 @@ export class AgentManager {
     return this.dispatchStateByProject.get(projectId);
   }
 
+  private releaseClaimedAnnotations(
+    annotationIds: string[],
+    owner: { agentId: string; runId: string },
+  ): void {
+    for (const annotationId of annotationIds) {
+      releaseAnnotationV2(annotationId, owner);
+    }
+  }
+
+  private claimPendingAnnotations(
+    projectId: string,
+    agentId: string,
+    runId: string,
+    sessionId?: string,
+  ): AnnotationV2[] {
+    requeueExpiredProcessingAnnotationsV2();
+    const candidates = this.collectPendingAnnotations(projectId, sessionId);
+    const startedAt = nowIso();
+    const expiresAt = new Date(Date.now() + PROCESSING_TTL_SECONDS * 1000).toISOString();
+    const claimed: AnnotationV2[] = [];
+
+    for (const annotation of candidates) {
+      const next = claimAnnotationV2(annotation.id, {
+        agentId,
+        runId,
+        processingStartedAt: startedAt,
+        processingExpiresAt: expiresAt,
+      });
+      if (next) {
+        claimed.push(next);
+      }
+    }
+
+    return claimed;
+  }
+
   private updateDispatchState(
     projectId: string,
     state: Omit<AgentDispatchState, "projectId" | "updatedAt">,
@@ -345,7 +415,7 @@ export class AgentManager {
 
   private createRuntime(projectId: string, config: ResolvedAgentConfig): AgentRuntime {
     const projectRoot = this.resolveProjectRoot(projectId);
-    const client = new AcpClient({
+    const client = new AcpRuntime({
       command: config.resolvedCommand,
       args: config.args,
       env: Object.fromEntries(config.env.map((entry) => [entry.name, entry.value])),
@@ -383,6 +453,34 @@ export class AgentManager {
     return runtime;
   }
 
+  private async establishRuntimeSession(projectId: string, runtime: AgentRuntime): Promise<void> {
+    if (!runtime.client.isRunning()) {
+      runtime.initialized = false;
+      runtime.sessionId = undefined;
+    }
+
+    if (!runtime.initialized) {
+      await runtime.client.start();
+      const initResult = await runtime.client.initialize();
+      runtime.initialized = true;
+      runtime.capabilities = initResult.agentCapabilities;
+    }
+
+    if (runtime.sessionId) {
+      return;
+    }
+
+    runtime.status = "connecting";
+    const mcpServers = [buildMcpServerConfig(this.httpBaseUrl)];
+    const cwd = this.resolveProjectRoot(projectId);
+    const created = await runtime.client.newSession(cwd, mcpServers);
+    if (!created.sessionId?.trim()) {
+      throw new Error("Agent session was not established");
+    }
+
+    runtime.sessionId = created.sessionId;
+  }
+
   private async ensureRuntime(projectId: string, agentId?: string): Promise<AgentRuntime> {
     const targetAgentId = agentId ?? this.getEffectiveAgentId(projectId);
     if (!targetAgentId) {
@@ -396,7 +494,29 @@ export class AgentManager {
 
     const key = this.runtimeKey(projectId, targetAgentId);
     const existing = this.runtimes.get(key);
-    if (existing && existing.status !== "error") return existing;
+    if (existing && existing.status !== "error") {
+      try {
+        await this.establishRuntimeSession(projectId, existing);
+        existing.status = existing.status === "busy" ? "busy" : "ready";
+        existing.lastError = undefined;
+        this.emit({
+          type: "status",
+          projectId,
+          agent: this.summarizeAgent(projectId, config),
+        });
+        return existing;
+      } catch (error) {
+        existing.status = "error";
+        existing.lastError = (error as Error).message;
+        this.emit({
+          type: "error",
+          projectId,
+          message: existing.lastError,
+          agent: this.summarizeAgent(projectId, config),
+        });
+        throw error;
+      }
+    }
     if (existing && existing.status === "error") {
       existing.disposeUpdateSubscription?.();
       await existing.client.close();
@@ -407,17 +527,7 @@ export class AgentManager {
     this.runtimes.set(key, runtime);
 
     try {
-      await runtime.client.start();
-      const initResult = await runtime.client.initialize();
-      runtime.initialized = true;
-      runtime.capabilities = initResult.agentCapabilities;
-      runtime.status = "connecting";
-
-      const mcpServers = [buildMcpServerConfig(this.httpBaseUrl)];
-      const cwd = this.resolveProjectRoot(projectId);
-
-      const created = await runtime.client.createSession(cwd, mcpServers);
-      runtime.sessionId = created.sessionId;
+      await this.establishRuntimeSession(projectId, runtime);
       runtime.status = "ready";
       runtime.lastError = undefined;
       this.emit({
@@ -465,18 +575,21 @@ export class AgentManager {
   private collectSessions(projectId: string, sessionId?: string): Session[] {
     if (sessionId) {
       const session = getSession(sessionId);
-      return session ? [session] : [];
+      return session && isDispatchableSession(session) ? [session] : [];
     }
 
-    return filterSessionsByProject(listSessions(), projectId);
+    return filterSessionsByProject(listSessions(), projectId).filter(isDispatchableSession);
   }
 
   private collectPendingAnnotations(projectId: string, sessionId?: string): AnnotationV2[] {
     if (sessionId) {
-      return getPendingAnnotationsV2(sessionId);
+      const session = getSession(sessionId);
+      return session && isDispatchableSession(session)
+        ? getPendingAnnotationsV2(sessionId)
+        : [];
     }
 
-    const sessions = filterSessionsByProject(listSessions(), projectId);
+    const sessions = filterSessionsByProject(listSessions(), projectId).filter(isDispatchableSession);
     return sessions.flatMap((session) => getPendingAnnotationsV2(session.id));
   }
 
@@ -491,8 +604,9 @@ export class AgentManager {
       throw new Error("No active agent configured for this project");
     }
 
-    const annotations = this.collectPendingAnnotations(params.projectId, params.sessionId);
-    if (annotations.length === 0) {
+    requeueExpiredProcessingAnnotationsV2();
+    const pendingAnnotations = this.collectPendingAnnotations(params.projectId, params.sessionId);
+    if (pendingAnnotations.length === 0) {
       return this.updateDispatchState(params.projectId, {
         agentId,
         mode: params.mode,
@@ -508,8 +622,29 @@ export class AgentManager {
       throw new Error("Agent session was not established");
     }
 
+    const runId = randomUUID();
+    const annotations = this.claimPendingAnnotations(params.projectId, agentId, runId, params.sessionId);
+    if (annotations.length === 0) {
+      return this.updateDispatchState(params.projectId, {
+        agentId,
+        runId,
+        mode: params.mode,
+        trigger: params.trigger,
+        state: "skipped",
+        claimedCount: 0,
+        message: "All pending annotations are already processing",
+      });
+    }
+
     runtime.status = "busy";
     runtime.lastAgentText = "";
+    runtime.lastError = undefined;
+    this.activeDispatchRunByProject.set(params.projectId, {
+      runId,
+      agentId,
+      annotationIds: annotations.map((annotation) => annotation.id),
+      cancelRequested: false,
+    });
     this.emit({
       type: "status",
       projectId: params.projectId,
@@ -518,15 +653,19 @@ export class AgentManager {
 
     this.updateDispatchState(params.projectId, {
       agentId,
+      runId,
       mode: params.mode,
       trigger: params.trigger,
       state: "sending",
-      message: "Dispatching annotations to agent",
+      claimedCount: annotations.length,
+      message: `Dispatching ${annotations.length} claimed annotation${annotations.length === 1 ? "" : "s"} to agent`,
     });
 
     try {
       const prompt = buildPrompt({
         projectId: params.projectId,
+        agentId,
+        runId,
         mode: params.mode,
         trigger: params.trigger,
         annotations,
@@ -535,25 +674,65 @@ export class AgentManager {
       const result = await runtime.client.prompt(runtime.sessionId, prompt);
       runtime.status = "ready";
 
+      const activeRun = this.activeDispatchRunByProject.get(params.projectId);
+      if (!activeRun || activeRun.runId !== runId || activeRun.cancelRequested) {
+        return this.getDispatchState(params.projectId) ?? {
+          projectId: params.projectId,
+          agentId,
+          runId,
+          mode: params.mode,
+          trigger: params.trigger,
+          state: "cancelled",
+          claimedCount: annotations.length,
+          message: "Cancelled current agent turn",
+          updatedAt: nowIso(),
+        };
+      }
+
       const message = truncateMessage(runtime.lastAgentText) || result.stopReason || "Turn completed";
       return this.updateDispatchState(params.projectId, {
         agentId,
+        runId,
         mode: params.mode,
         trigger: params.trigger,
         state: "succeeded",
+        claimedCount: annotations.length,
         message,
       });
     } catch (error) {
+      const activeRun = this.activeDispatchRunByProject.get(params.projectId);
+      if (!activeRun || activeRun.runId !== runId || activeRun.cancelRequested) {
+        runtime.status = "ready";
+        return this.getDispatchState(params.projectId) ?? {
+          projectId: params.projectId,
+          agentId,
+          runId,
+          mode: params.mode,
+          trigger: params.trigger,
+          state: "cancelled",
+          claimedCount: annotations.length,
+          message: "Cancelled current agent turn",
+          updatedAt: nowIso(),
+        };
+      }
+
       runtime.status = "error";
       runtime.lastError = (error as Error).message;
+      this.releaseClaimedAnnotations(annotations.map((annotation) => annotation.id), { agentId, runId });
       return this.updateDispatchState(params.projectId, {
         agentId,
+        runId,
         mode: params.mode,
         trigger: params.trigger,
         state: "failed",
+        claimedCount: annotations.length,
         message: runtime.lastError,
       });
     } finally {
+      const activeRun = this.activeDispatchRunByProject.get(params.projectId);
+      if (activeRun?.runId === runId) {
+        this.activeDispatchRunByProject.delete(params.projectId);
+      }
       this.emit({
         type: "status",
         projectId: params.projectId,
@@ -563,20 +742,40 @@ export class AgentManager {
   }
 
   async cancelDispatch(projectId: string): Promise<AgentDispatchState | undefined> {
-    const agentId = this.getEffectiveAgentId(projectId);
+    const activeRun = this.activeDispatchRunByProject.get(projectId);
+    const agentId = activeRun?.agentId ?? this.getEffectiveAgentId(projectId);
     if (!agentId) return undefined;
 
     const runtime = this.runtimes.get(this.runtimeKey(projectId, agentId));
-    if (!runtime?.sessionId) return undefined;
+    if (activeRun) {
+      activeRun.cancelRequested = true;
+    }
+    if (runtime?.sessionId) {
+      await runtime.client.cancel(runtime.sessionId);
+      runtime.status = "ready";
+    }
 
-    await runtime.client.cancel(runtime.sessionId);
-    runtime.status = "ready";
+    if (activeRun) {
+      this.releaseClaimedAnnotations(activeRun.annotationIds, {
+        agentId: activeRun.agentId,
+        runId: activeRun.runId,
+      });
+      this.activeDispatchRunByProject.delete(projectId);
+    }
+
+    this.emit({
+      type: "status",
+      projectId,
+      agent: this.summarizeAgent(projectId, runtime?.config ?? this.resolveAgentConfig(agentId)),
+    });
 
     return this.updateDispatchState(projectId, {
       agentId,
+      runId: activeRun?.runId,
       mode: "manual",
       trigger: "manual.send",
       state: "cancelled",
+      claimedCount: activeRun?.annotationIds.length ?? 0,
       message: "Cancelled current agent turn",
     });
   }

@@ -16,16 +16,11 @@ const command = process.argv[2];
 
 async function runAgentsInit() {
   const { getAgentConfigPath, loadAgentCatalog, writeAgentCatalogConfig } = await import("./server/agent-config.js");
-  const { refreshRegistryCache } = await import("./server/registry/index.js");
-
-  await refreshRegistryCache();
   const catalog = loadAgentCatalog();
   writeAgentCatalogConfig(catalog);
 
   console.log(`✓ Wrote agent catalog to ${getAgentConfigPath()}`);
-  if (catalog.registryUrl) {
-    console.log(`  Registry: ${catalog.registryUrl}`);
-  }
+  console.log(`  Snapshot source: ${catalog.snapshotSource ?? "embedded"}`);
   for (const agent of catalog.agents) {
     console.log(`  - ${agent.label}: ${agent.available ? "available" : "missing"} (${agent.resolvedCommand})`);
   }
@@ -33,16 +28,13 @@ async function runAgentsInit() {
 
 async function runAgentsList() {
   const { loadAgentCatalog } = await import("./server/agent-config.js");
-  const { getAgentRegistryCachePath, refreshRegistryCache } = await import("./server/registry/index.js");
-
-  await refreshRegistryCache();
   const catalog = loadAgentCatalog();
 
   console.log(JSON.stringify({
     configPath: catalog.configPath,
-    registryUrl: catalog.registryUrl,
-    registryCachePath: getAgentRegistryCachePath(),
     source: catalog.source,
+    snapshotSource: catalog.snapshotSource,
+    snapshotGeneratedAt: catalog.snapshotGeneratedAt,
     defaultAgentId: catalog.defaultAgentId,
     agents: catalog.agents.map((agent) => ({
       id: agent.id,
@@ -61,8 +53,6 @@ async function runAgentsList() {
 
 async function runAgentsDoctor() {
   const { getAgentConfigPath, loadAgentCatalog } = await import("./server/agent-config.js");
-  const { getAgentRegistryCachePath, refreshRegistryCache } = await import("./server/registry/index.js");
-  const registry = await refreshRegistryCache();
   const catalog = loadAgentCatalog();
 
   console.log(`
@@ -71,8 +61,8 @@ async function runAgentsDoctor() {
 ╚═══════════════════════════════════════════════════════════════╝
 `);
   console.log(`Config path: ${getAgentConfigPath()}`);
-  console.log(`Registry cache: ${getAgentRegistryCachePath()}`);
-  console.log(`Registry source: ${registry.source}${registry.registryUrl ? ` (${registry.registryUrl})` : ""}`);
+  console.log(`Registry source: ${catalog.snapshotSource ?? "embedded snapshot"}`);
+  console.log(`Snapshot generated: ${catalog.snapshotGeneratedAt ?? "unknown"}`);
   console.log(`Default agent: ${catalog.defaultAgentId ?? "(none)"}`);
   console.log();
 
@@ -321,12 +311,8 @@ if (command === "init") {
   });
 } else if (command === "server") {
   // Dynamic import to avoid loading server code for other commands
-  Promise.all([
-    import("./server/index.js"),
-    import("./server/registry/index.js"),
-  ]).then(([serverModule, registryModule]) => {
+  import("./server/index.js").then((serverModule) => {
     const { startHttpServer, startMcpServer, setApiKey } = serverModule;
-    const { refreshRegistryCache } = registryModule;
     const args = process.argv.slice(3);
     let port = 4748;
     let mcpOnly = false;
@@ -367,19 +353,17 @@ if (command === "init") {
       setApiKey(apiKey);
     }
 
-    refreshRegistryCache().catch(() => undefined).finally(() => {
-      if (!mcpOnly) {
-        startHttpServer(port, apiKey);
-      }
+    if (!mcpOnly) {
+      startHttpServer(port, apiKey);
+    }
 
-      if (noStdio) {
-        return;
-      }
+    if (noStdio) {
+      return;
+    }
 
-      startMcpServer(httpUrl).catch((err) => {
-        console.error("MCP server error:", err);
-        process.exit(1);
-      });
+    startMcpServer(httpUrl).catch((err) => {
+      console.error("MCP server error:", err);
+      process.exit(1);
     });
   });
 } else if (command === "help" || command === "--help" || command === "-h" || !command) {
@@ -406,7 +390,7 @@ Commands:
 
   agents    Manage the local ACP/CLI bridge catalog:
             - list   Print detected/configured agents as JSON
-            - init   Write ~/.agentation/agents.json from the registry-backed catalog
+            - init   Write ~/.agentation/agents.json from the embedded snapshot catalog
             - doctor Show current local agent availability
 
   server    Starts the unified Agentation companion on one port.
