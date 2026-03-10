@@ -107,12 +107,13 @@ pnpm release:major
 
 这些命令会做几件事：
 
-1. 使用 `bumpp` 同时更新以下文件中的版本号：
+1. 使用根目录的 `bump.config.ts` 驱动 `bumpp`，同时更新以下文件中的版本号：
    - `package.json`
    - `packages/core/package.json`
    - `packages/ui-vue/package.json`
    - `packages/vite-plugin-agentation-vue/package.json`
    - `mcp/package.json`
+   - `mcp/src/server/acp-runtime.ts` 中的 `CLIENT_VERSION`
 2. 创建 commit，格式为 `release: vX.Y.Z`
 3. 创建 tag，格式为 `vX.Y.Z`
 4. 推送 commit 和 tag 到远端
@@ -173,7 +174,7 @@ pnpm verify
 如果你要先本地演练，可以直接手动运行 `bumpp`，例如：
 
 ```bash
-pnpm exec bumpp package.json packages/core/package.json packages/ui-vue/package.json packages/vite-plugin-agentation-vue/package.json mcp/package.json --all --git-check --release patch
+pnpm exec bumpp --all --git-check --release patch
 ```
 
 这样你可以先确认版本修改结果，再决定是否提交和推送。

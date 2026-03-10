@@ -25,10 +25,10 @@
     "verify": "pnpm build:release && pnpm test",
     "mcp": "pnpm --filter agentation-vue-mcp start",
     "publish:release": "node scripts/publish-release.mjs",
-    "release": "pnpm exec bumpp package.json packages/core/package.json packages/ui-vue/package.json packages/vite-plugin-agentation-vue/package.json mcp/package.json --all --git-check --commit \"release: v%s\" --tag \"v%s\" --push",
-    "release:patch": "pnpm exec bumpp package.json packages/core/package.json packages/ui-vue/package.json packages/vite-plugin-agentation-vue/package.json mcp/package.json --all --git-check --commit \"release: v%s\" --tag \"v%s\" --push --release patch --yes",
-    "release:minor": "pnpm exec bumpp package.json packages/core/package.json packages/ui-vue/package.json packages/vite-plugin-agentation-vue/package.json mcp/package.json --all --git-check --commit \"release: v%s\" --tag \"v%s\" --push --release minor --yes",
-    "release:major": "pnpm exec bumpp package.json packages/core/package.json packages/ui-vue/package.json packages/vite-plugin-agentation-vue/package.json mcp/package.json --all --git-check --commit \"release: v%s\" --tag \"v%s\" --push --release major --yes"
+    "release": "pnpm exec bumpp --all --git-check --commit \"release: v%s\" --tag \"v%s\" --push",
+    "release:patch": "pnpm exec bumpp --all --git-check --commit \"release: v%s\" --tag \"v%s\" --push --release patch --yes",
+    "release:minor": "pnpm exec bumpp --all --git-check --commit \"release: v%s\" --tag \"v%s\" --push --release minor --yes",
+    "release:major": "pnpm exec bumpp --all --git-check --commit \"release: v%s\" --tag \"v%s\" --push --release major --yes"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.4",
