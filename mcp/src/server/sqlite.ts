@@ -17,6 +17,8 @@ import type {
   SessionWithAnnotations,
   SessionWithAnnotationsV2,
   Annotation,
+  AnnotationClaim,
+  AnnotationClaimOwner,
   AnnotationV2,
   AnnotationStatus,
   ThreadMessage,
@@ -130,6 +132,10 @@ function initDatabase(db: Database.Database): void {
       metadata TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT,
+      processing_by_agent_id TEXT,
+      processing_by_run_id TEXT,
+      processing_started_at TEXT,
+      processing_expires_at TEXT,
       FOREIGN KEY (session_id) REFERENCES sessions(id)
     );
 
@@ -163,6 +169,10 @@ function initDatabase(db: Database.Database): void {
   ensureColumn(db, "annotations_v2", "resolved_at TEXT");
   ensureColumn(db, "annotations_v2", "resolved_by TEXT");
   ensureColumn(db, "annotations_v2", "author_id TEXT");
+  ensureColumn(db, "annotations_v2", "processing_by_agent_id TEXT");
+  ensureColumn(db, "annotations_v2", "processing_by_run_id TEXT");
+  ensureColumn(db, "annotations_v2", "processing_started_at TEXT");
+  ensureColumn(db, "annotations_v2", "processing_expires_at TEXT");
 }
 
 function ensureColumn(
@@ -178,6 +188,22 @@ function ensureColumn(
   }
 
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnDefinition}`);
+}
+
+function matchesClaimOwner(annotation: AnnotationV2, owner?: AnnotationClaimOwner): boolean {
+  if (!owner || (!owner.agentId && !owner.runId)) {
+    return true
+  }
+
+  if (owner.agentId && annotation.processingByAgentId !== owner.agentId) {
+    return false
+  }
+
+  if (owner.runId && annotation.processingByRunId !== owner.runId) {
+    return false
+  }
+
+  return true
 }
 
 // -----------------------------------------------------------------------------
@@ -289,6 +315,10 @@ function rowToAnnotationV2(row: Record<string, unknown>): AnnotationV2 {
     resolvedAt: row.resolved_at as string | undefined,
     resolvedBy: row.resolved_by as AnnotationV2["resolvedBy"],
     authorId: row.author_id as string | undefined,
+    processingByAgentId: row.processing_by_agent_id as string | undefined,
+    processingByRunId: row.processing_by_run_id as string | undefined,
+    processingStartedAt: row.processing_started_at as string | undefined,
+    processingExpiresAt: row.processing_expires_at as string | undefined,
   };
 }
 
@@ -345,14 +375,14 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
     deleteAnnotation: db.prepare("DELETE FROM annotations WHERE id = ?"),
     updateAnnotation: db.prepare(`
       UPDATE annotations SET
-        comment = COALESCE(@comment, comment),
-        status = COALESCE(@status, status),
+        comment = @comment,
+        status = @status,
         updated_at = @updatedAt,
-        resolved_at = COALESCE(@resolvedAt, resolved_at),
-        resolved_by = COALESCE(@resolvedBy, resolved_by),
-        thread = COALESCE(@thread, thread),
-        intent = COALESCE(@intent, intent),
-        severity = COALESCE(@severity, severity)
+        resolved_at = @resolvedAt,
+        resolved_by = @resolvedBy,
+        thread = @thread,
+        intent = @intent,
+        severity = @severity
       WHERE id = @id
     `),
 
@@ -373,11 +403,13 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
       INSERT INTO annotations_v2 (
         id, session_id, schema_version, timestamp, url, element_selector,
         element_text, comment, source, metadata, intent, severity, status,
-        thread, created_at, updated_at, resolved_at, resolved_by, author_id
+        thread, created_at, updated_at, resolved_at, resolved_by, author_id,
+        processing_by_agent_id, processing_by_run_id, processing_started_at, processing_expires_at
       ) VALUES (
         @id, @sessionId, @schemaVersion, @timestamp, @url, @elementSelector,
         @elementText, @comment, @source, @metadata, @intent, @severity, @status,
-        @thread, @createdAt, @updatedAt, @resolvedAt, @resolvedBy, @authorId
+        @thread, @createdAt, @updatedAt, @resolvedAt, @resolvedBy, @authorId,
+        @processingByAgentId, @processingByRunId, @processingStartedAt, @processingExpiresAt
       )
     `),
     getAnnotationV2: db.prepare("SELECT * FROM annotations_v2 WHERE id = ?"),
@@ -387,20 +419,54 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
     getPendingAnnotationsV2: db.prepare(
       "SELECT * FROM annotations_v2 WHERE session_id = ? AND status = 'pending' ORDER BY created_at"
     ),
+    getExpiredProcessingAnnotationsV2: db.prepare(
+      "SELECT id FROM annotations_v2 WHERE status = 'processing' AND processing_expires_at IS NOT NULL AND processing_expires_at <= ?"
+    ),
     updateAnnotationV2: db.prepare(`
       UPDATE annotations_v2 SET
-        element_text = COALESCE(@elementText, element_text),
-        comment = COALESCE(@comment, comment),
-        source = COALESCE(@source, source),
-        metadata = COALESCE(@metadata, metadata),
-        intent = COALESCE(@intent, intent),
-        severity = COALESCE(@severity, severity),
-        status = COALESCE(@status, status),
-        thread = COALESCE(@thread, thread),
-        resolved_at = COALESCE(@resolvedAt, resolved_at),
-        resolved_by = COALESCE(@resolvedBy, resolved_by),
+        element_text = @elementText,
+        comment = @comment,
+        source = @source,
+        metadata = @metadata,
+        intent = @intent,
+        severity = @severity,
+        status = @status,
+        thread = @thread,
+        resolved_at = @resolvedAt,
+        resolved_by = @resolvedBy,
+        processing_by_agent_id = @processingByAgentId,
+        processing_by_run_id = @processingByRunId,
+        processing_started_at = @processingStartedAt,
+        processing_expires_at = @processingExpiresAt,
         updated_at = @updatedAt
       WHERE id = @id
+    `),
+    claimAnnotationV2: db.prepare(`
+      UPDATE annotations_v2 SET
+        status = 'processing',
+        processing_by_agent_id = @processingByAgentId,
+        processing_by_run_id = @processingByRunId,
+        processing_started_at = @processingStartedAt,
+        processing_expires_at = @processingExpiresAt,
+        resolved_at = NULL,
+        resolved_by = NULL,
+        updated_at = @updatedAt
+      WHERE id = @id AND status = 'pending'
+    `),
+    releaseAnnotationV2: db.prepare(`
+      UPDATE annotations_v2 SET
+        status = 'pending',
+        processing_by_agent_id = NULL,
+        processing_by_run_id = NULL,
+        processing_started_at = NULL,
+        processing_expires_at = NULL,
+        resolved_at = NULL,
+        resolved_by = NULL,
+        updated_at = @updatedAt
+      WHERE id = @id
+        AND status = 'processing'
+        AND (@agentId IS NULL OR processing_by_agent_id = @agentId)
+        AND (@runId IS NULL OR processing_by_run_id = @runId)
     `),
     deleteAnnotationV2: db.prepare("DELETE FROM annotations_v2 WHERE id = ?"),
   };
@@ -582,16 +648,22 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
       const existing = this.getAnnotation(id);
       if (!existing) return undefined;
 
+      const next: Annotation = {
+        ...existing,
+        ...data,
+        updatedAt: new Date().toISOString(),
+      };
+
       stmts.updateAnnotation.run({
         id,
-        comment: data.comment ?? null,
-        status: data.status ?? null,
-        updatedAt: new Date().toISOString(),
-        resolvedAt: data.resolvedAt ?? null,
-        resolvedBy: data.resolvedBy ?? null,
-        thread: data.thread ? JSON.stringify(data.thread) : null,
-        intent: data.intent ?? null,
-        severity: data.severity ?? null,
+        comment: next.comment,
+        status: next.status ?? "pending",
+        updatedAt: next.updatedAt,
+        resolvedAt: next.resolvedAt ?? null,
+        resolvedBy: next.resolvedBy ?? null,
+        thread: next.thread ? JSON.stringify(next.thread) : null,
+        intent: next.intent ?? null,
+        severity: next.severity ?? null,
       });
 
       const updated = this.getAnnotation(id);
@@ -714,6 +786,10 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
         resolvedAt: annotation.resolvedAt ?? null,
         resolvedBy: annotation.resolvedBy ?? null,
         authorId: annotation.authorId ?? null,
+        processingByAgentId: annotation.processingByAgentId ?? null,
+        processingByRunId: annotation.processingByRunId ?? null,
+        processingStartedAt: annotation.processingStartedAt ?? null,
+        processingExpiresAt: annotation.processingExpiresAt ?? null,
       });
 
       const event = eventBus.emit("annotation.created", sessionId, annotation);
@@ -734,19 +810,29 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
       const existing = this.getAnnotationV2(id);
       if (!existing) return undefined;
 
+      const next: AnnotationV2 = {
+        ...existing,
+        ...data,
+        updatedAt: new Date().toISOString(),
+      };
+
       stmts.updateAnnotationV2.run({
         id,
-        elementText: data.elementText ?? null,
-        comment: data.comment ?? null,
-        source: data.source ? JSON.stringify(data.source) : null,
-        metadata: data.metadata ? JSON.stringify(data.metadata) : null,
-        intent: data.intent ?? null,
-        severity: data.severity ?? null,
-        status: data.status ?? null,
-        thread: data.thread ? JSON.stringify(data.thread) : null,
-        resolvedAt: data.resolvedAt ?? null,
-        resolvedBy: data.resolvedBy ?? null,
-        updatedAt: new Date().toISOString(),
+        elementText: next.elementText ?? null,
+        comment: next.comment,
+        source: JSON.stringify(next.source),
+        metadata: next.metadata ? JSON.stringify(next.metadata) : null,
+        intent: next.intent ?? null,
+        severity: next.severity ?? null,
+        status: next.status ?? "pending",
+        thread: next.thread ? JSON.stringify(next.thread) : null,
+        resolvedAt: next.resolvedAt ?? null,
+        resolvedBy: next.resolvedBy ?? null,
+        processingByAgentId: next.processingByAgentId ?? null,
+        processingByRunId: next.processingByRunId ?? null,
+        processingStartedAt: next.processingStartedAt ?? null,
+        processingExpiresAt: next.processingExpiresAt ?? null,
+        updatedAt: next.updatedAt,
       });
 
       const updated = this.getAnnotationV2(id);
@@ -763,12 +849,96 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
       status: AnnotationStatus,
       resolvedBy?: "human" | "agent",
     ): AnnotationV2 | undefined {
-      const isResolved = status === "resolved" || status === "dismissed";
+      const resolvedAt = status === "resolved" || status === "dismissed"
+        ? new Date().toISOString()
+        : undefined
+
       return this.updateAnnotationV2(id, {
         status,
-        resolvedAt: isResolved ? new Date().toISOString() : undefined,
-        resolvedBy: isResolved ? (resolvedBy || "agent") : undefined,
+        resolvedAt,
+        resolvedBy: resolvedAt ? (resolvedBy || "agent") : undefined,
+        ...(status === "processing"
+          ? {}
+          : {
+              processingByAgentId: undefined,
+              processingByRunId: undefined,
+              processingStartedAt: undefined,
+              processingExpiresAt: undefined,
+            }),
       });
+    },
+
+    claimAnnotationV2(id: string, claim: AnnotationClaim): AnnotationV2 | undefined {
+      const existing = this.getAnnotationV2(id);
+      if (!existing) return undefined;
+
+      if (
+        (existing.status ?? "pending") === "processing"
+        && existing.processingByAgentId === claim.agentId
+        && existing.processingByRunId === claim.runId
+      ) {
+        return existing
+      }
+
+      if ((existing.status ?? "pending") !== "pending") {
+        return undefined
+      }
+
+      const updatedAt = new Date().toISOString()
+      const result = stmts.claimAnnotationV2.run({
+        id,
+        processingByAgentId: claim.agentId,
+        processingByRunId: claim.runId,
+        processingStartedAt: claim.processingStartedAt,
+        processingExpiresAt: claim.processingExpiresAt,
+        updatedAt,
+      })
+      if (result.changes === 0) return undefined
+
+      const claimed = this.getAnnotationV2(id)
+      if (claimed?.sessionId) {
+        const event = eventBus.emit("annotation.updated", claimed.sessionId, claimed)
+        persistEvent(event)
+      }
+
+      return (claimed?.status ?? "pending") === "processing"
+        && claimed?.processingByRunId === claim.runId
+        ? claimed
+        : undefined
+    },
+
+    releaseAnnotationV2(id: string, owner?: AnnotationClaimOwner): AnnotationV2 | undefined {
+      const existing = this.getAnnotationV2(id);
+      if (!existing) return undefined;
+      if ((existing.status ?? "pending") !== "processing") return undefined;
+      if (!matchesClaimOwner(existing, owner)) return undefined;
+
+      const updatedAt = new Date().toISOString()
+      const result = stmts.releaseAnnotationV2.run({
+        id,
+        agentId: owner?.agentId ?? null,
+        runId: owner?.runId ?? null,
+        updatedAt,
+      })
+      if (result.changes === 0) return undefined
+
+      const released = this.getAnnotationV2(id)
+      if (released?.sessionId) {
+        const event = eventBus.emit("annotation.updated", released.sessionId, released)
+        persistEvent(event)
+      }
+
+      return released
+    },
+
+    requeueExpiredProcessingAnnotationsV2(nowIso = new Date().toISOString()): number {
+      const expiredRows = stmts.getExpiredProcessingAnnotationsV2.all(nowIso) as Array<{ id: string }>
+
+      for (const row of expiredRows) {
+        this.releaseAnnotationV2(row.id)
+      }
+
+      return expiredRows.length
     },
 
     addThreadMessageV2(

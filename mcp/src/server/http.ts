@@ -4,12 +4,14 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "http"
+import { randomUUID } from "crypto"
 import {
   createSession,
   getAnnotationV2,
   getEventsSince,
   getPendingAnnotationsV2,
   getSession,
+  getSessionAnnotationsV2,
   getSessionWithAnnotationsV2,
   listSessions,
   addAnnotationV2,
@@ -18,6 +20,10 @@ import {
   updateAnnotationV2,
   updateAnnotationV2Status,
   updateSessionProjectId,
+  updateSessionStatus,
+  claimAnnotationV2,
+  releaseAnnotationV2,
+  requeueExpiredProcessingAnnotationsV2,
 } from "./store.js"
 import { eventBus } from "./events.js"
 import { AgentManager } from "./agent-manager.js"
@@ -35,6 +41,8 @@ import type {
   AFSEvent,
   AnnotationV2,
   Session,
+  SessionStatus,
+  SessionSummary,
   ThreadMessage,
 } from "../types.js"
 
@@ -62,6 +70,8 @@ type RouteHandler = (
   res: ServerResponse,
   params: Record<string, string>,
 ) => Promise<void>
+
+const DEFAULT_PROCESSING_TTL_SECONDS = 600
 
 interface WebhookEventPayload {
   type: "annotation.created" | "annotation.updated" | "annotation.deleted" | "thread.message"
@@ -175,6 +185,17 @@ function isSessionPayload(payload: unknown): payload is Session {
 
 function isV2Event(event: AFSEvent): boolean {
   return isSessionPayload(event.payload) || isAnnotationV2Payload(event.payload)
+}
+
+function isSessionStatus(value: unknown): value is SessionStatus {
+  return value === "active" || value === "approved" || value === "closed"
+}
+
+function buildSessionSummary(session: Session): SessionSummary {
+  return {
+    ...session,
+    annotationCount: getSessionAnnotationsV2(session.id).length,
+  }
 }
 
 async function proxyToCloud(
@@ -362,6 +383,24 @@ function buildWebhookPayload(
   }
 }
 
+function cleanupExpiredProcessingAnnotations(): void {
+  requeueExpiredProcessingAnnotationsV2()
+}
+
+function normalizeTtlSeconds(value: unknown): number {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string"
+      ? Number.parseInt(value, 10)
+      : Number.NaN
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_PROCESSING_TTL_SECONDS
+  }
+
+  return Math.max(1, Math.floor(parsed))
+}
+
 const createSessionHandler: RouteHandler = async (req, res) => {
   try {
     const body = await parseBody<{ url?: string; projectId?: string; metadata?: Record<string, unknown> }>(req)
@@ -383,10 +422,12 @@ const listSessionsHandler: RouteHandler = async (req, res) => {
     ?? undefined
 
   const sessions = filterSessionsByProject(listSessions(), projectFilter)
+    .map(buildSessionSummary)
   sendJson(res, 200, sessions)
 }
 
 const getSessionV2Handler: RouteHandler = async (_req, res, params) => {
+  cleanupExpiredProcessingAnnotations()
   const session = getSessionWithAnnotationsV2(params.id)
   if (!session) {
     return sendError(res, 404, "Session not found")
@@ -397,15 +438,38 @@ const getSessionV2Handler: RouteHandler = async (_req, res, params) => {
 
 const updateSessionV2Handler: RouteHandler = async (req, res, params) => {
   try {
-    const body = await parseBody<{ projectId?: string; metadata?: Record<string, unknown> }>(req)
+    const body = await parseBody<{
+      projectId?: string
+      metadata?: Record<string, unknown>
+      status?: SessionStatus
+    }>(req)
     const projectId = body.projectId?.trim()
-    if (!projectId && !body.metadata) {
-      return sendError(res, 400, "projectId or metadata is required")
+    const status = body.status
+    if (!projectId && !body.metadata && !status) {
+      return sendError(res, 400, "projectId, metadata, or status is required")
     }
 
-    const session = updateSessionProjectId(params.id, projectId, body.metadata)
+    if (status && !isSessionStatus(status)) {
+      return sendError(res, 400, "status must be active, approved, or closed")
+    }
+
+    let session = getSession(params.id)
     if (!session) {
       return sendError(res, 404, "Session not found")
+    }
+
+    if (projectId || body.metadata) {
+      session = updateSessionProjectId(params.id, projectId, body.metadata)
+      if (!session) {
+        return sendError(res, 404, "Session not found")
+      }
+    }
+
+    if (status) {
+      session = updateSessionStatus(params.id, status)
+      if (!session) {
+        return sendError(res, 404, "Session not found")
+      }
     }
 
     sendJson(res, 200, session)
@@ -444,6 +508,7 @@ const addAnnotationV2Handler: RouteHandler = async (req, res, params) => {
 
 const updateAnnotationV2Handler: RouteHandler = async (req, res, params) => {
   try {
+    cleanupExpiredProcessingAnnotations()
     const body = await parseBody<Partial<AnnotationV2>>(req)
 
     const existing = getAnnotationV2(params.id)
@@ -457,14 +522,31 @@ const updateAnnotationV2Handler: RouteHandler = async (req, res, params) => {
       ...rest
     } = body
 
-    let annotation = Object.keys(rest).length > 0
-      ? updateAnnotationV2(params.id, rest)
+    const currentStatus = existing.status ?? "pending"
+    const nextStatus = typeof status === "string" ? status : undefined
+    const isStatusTransition = Boolean(nextStatus && nextStatus !== currentStatus)
+
+    if (nextStatus === "processing" && currentStatus !== "processing") {
+      return sendError(res, 400, "Use POST /v2/annotations/:id/claim to enter processing state")
+    }
+
+    const patch = {
+      ...rest,
+      ...(
+        resolvedBy !== undefined
+        && (nextStatus ?? currentStatus) !== "processing"
+        && !isStatusTransition
+          ? { resolvedBy }
+          : {}
+      ),
+    }
+
+    let annotation = Object.keys(patch).length > 0
+      ? updateAnnotationV2(params.id, patch)
       : existing
 
-    if (status) {
-      annotation = updateAnnotationV2Status(params.id, status, resolvedBy) ?? annotation
-    } else if (resolvedBy) {
-      annotation = updateAnnotationV2(params.id, { resolvedBy }) ?? annotation
+    if (isStatusTransition && nextStatus) {
+      annotation = updateAnnotationV2Status(params.id, nextStatus, resolvedBy) ?? annotation
     }
 
     if (!annotation) {
@@ -479,6 +561,7 @@ const updateAnnotationV2Handler: RouteHandler = async (req, res, params) => {
 }
 
 const getAnnotationV2Handler: RouteHandler = async (_req, res, params) => {
+  cleanupExpiredProcessingAnnotations()
   const annotation = getAnnotationV2(params.id)
   if (!annotation) {
     return sendError(res, 404, "Annotation not found")
@@ -498,6 +581,7 @@ const deleteAnnotationV2Handler: RouteHandler = async (_req, res, params) => {
 }
 
 const getPendingV2Handler: RouteHandler = async (_req, res, params) => {
+  cleanupExpiredProcessingAnnotations()
   const session = getSessionWithAnnotationsV2(params.id)
   if (!session) {
     return sendError(res, 404, "Session not found")
@@ -508,6 +592,7 @@ const getPendingV2Handler: RouteHandler = async (_req, res, params) => {
 }
 
 const getAllPendingV2Handler: RouteHandler = async (req, res) => {
+  cleanupExpiredProcessingAnnotations()
   const projectFilter = new URL(req.url || "/", "http://localhost")
     .searchParams
     .get("projectFilter")
@@ -517,6 +602,82 @@ const getAllPendingV2Handler: RouteHandler = async (req, res) => {
   const annotations = sessions.flatMap((session) => getPendingAnnotationsV2(session.id))
 
   sendJson(res, 200, { count: annotations.length, annotations })
+}
+
+const claimAnnotationV2Handler: RouteHandler = async (req, res, params) => {
+  try {
+    cleanupExpiredProcessingAnnotations()
+
+    const existing = getAnnotationV2(params.id)
+    if (!existing) {
+      return sendError(res, 404, "Annotation not found")
+    }
+
+    const body = await parseBody<{ agentId?: string; runId?: string; ttlSeconds?: number }>(req)
+    const agentId = body.agentId?.trim() || "agent"
+    const runId = body.runId?.trim() || randomUUID()
+    const ttlSeconds = normalizeTtlSeconds(body.ttlSeconds)
+    const now = new Date()
+    const annotation = claimAnnotationV2(params.id, {
+      agentId,
+      runId,
+      processingStartedAt: now.toISOString(),
+      processingExpiresAt: new Date(now.getTime() + ttlSeconds * 1000).toISOString(),
+    })
+
+    if (!annotation) {
+      return sendJson(res, 409, {
+        claimed: false,
+        annotation: getAnnotationV2(params.id),
+        error: "Annotation is already being processed or is no longer pending",
+      })
+    }
+
+    sendWebhooks(buildWebhookPayload("annotation.updated", annotation))
+    sendJson(res, 200, {
+      claimed: true,
+      annotation,
+      runId,
+      ttlSeconds,
+    })
+  } catch (error) {
+    sendError(res, 400, (error as Error).message)
+  }
+}
+
+const releaseAnnotationV2Handler: RouteHandler = async (req, res, params) => {
+  try {
+    cleanupExpiredProcessingAnnotations()
+
+    const existing = getAnnotationV2(params.id)
+    if (!existing) {
+      return sendError(res, 404, "Annotation not found")
+    }
+
+    const body = await parseBody<{ agentId?: string; runId?: string }>(req)
+    const agentId = body.agentId?.trim() || undefined
+    const runId = body.runId?.trim() || undefined
+    if (!agentId && !runId) {
+      return sendError(res, 400, "agentId or runId is required")
+    }
+
+    const annotation = releaseAnnotationV2(params.id, { agentId, runId })
+    if (!annotation) {
+      return sendJson(res, 409, {
+        released: false,
+        annotation: getAnnotationV2(params.id),
+        error: "Annotation is not being processed by this run",
+      })
+    }
+
+    sendWebhooks(buildWebhookPayload("annotation.updated", annotation))
+    sendJson(res, 200, {
+      released: true,
+      annotation,
+    })
+  } catch (error) {
+    sendError(res, 400, (error as Error).message)
+  }
 }
 
 const addThreadV2Handler: RouteHandler = async (req, res, params) => {
@@ -796,6 +957,18 @@ function createRoutes(port: number): Route[] {
       method: "POST",
       pattern: /^\/v2\/sessions\/([^/]+)\/annotations$/,
       handler: addAnnotationV2Handler,
+      paramNames: ["id"],
+    },
+    {
+      method: "POST",
+      pattern: /^\/v2\/annotations\/([^/]+)\/claim$/,
+      handler: claimAnnotationV2Handler,
+      paramNames: ["id"],
+    },
+    {
+      method: "POST",
+      pattern: /^\/v2\/annotations\/([^/]+)\/release$/,
+      handler: releaseAnnotationV2Handler,
       paramNames: ["id"],
     },
     {

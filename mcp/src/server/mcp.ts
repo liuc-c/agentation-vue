@@ -64,6 +64,19 @@ const StatusSchema = z.object({
   annotationId: z.string(),
 })
 
+const ClaimSchema = z.object({
+  annotationId: z.string(),
+  agentId: z.string().optional(),
+  runId: z.string().optional(),
+  ttlSeconds: z.number().optional(),
+})
+
+const ReleaseSchema = z.object({
+  annotationId: z.string(),
+  agentId: z.string().optional(),
+  runId: z.string().optional(),
+})
+
 const ResolveSchema = z.object({
   annotationId: z.string(),
   summary: z.string().optional(),
@@ -147,6 +160,54 @@ export const TOOLS = [
         annotationId: {
           type: "string",
           description: "Exact annotation ID.",
+        },
+      },
+      required: ["annotationId"],
+    },
+  },
+  {
+    name: "agentation_v2_claim",
+    description: "Atomically mark one annotation as processing before you start work.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        annotationId: {
+          type: "string",
+          description: "Exact annotation ID.",
+        },
+        agentId: {
+          type: "string",
+          description: "Optional logical agent identifier recorded on the claim.",
+        },
+        runId: {
+          type: "string",
+          description: "Optional run identifier. Generated automatically when omitted.",
+        },
+        ttlSeconds: {
+          type: "number",
+          description: "How long the processing claim should live before it automatically returns to pending.",
+        },
+      },
+      required: ["annotationId"],
+    },
+  },
+  {
+    name: "agentation_v2_release",
+    description: "Release a processing claim and move the annotation back to pending.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        annotationId: {
+          type: "string",
+          description: "Exact annotation ID.",
+        },
+        agentId: {
+          type: "string",
+          description: "Optional logical agent identifier originally used for claim.",
+        },
+        runId: {
+          type: "string",
+          description: "Claim run identifier returned by agentation_v2_claim.",
         },
       },
       required: ["annotationId"],
@@ -281,15 +342,7 @@ async function httpRequest<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const headers = new Headers(init?.headers)
-  if (apiKey) {
-    headers.set("x-api-key", apiKey)
-  }
-
-  const response = await fetch(`${httpBaseUrl}${path}`, {
-    ...init,
-    headers,
-  })
+  const response = await rawHttpRequest(path, init)
 
   if (!response.ok) {
     const body = await response.text()
@@ -301,6 +354,21 @@ async function httpRequest<T>(
   }
 
   return response.json() as Promise<T>
+}
+
+async function rawHttpRequest(
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const headers = new Headers(init?.headers)
+  if (apiKey) {
+    headers.set("x-api-key", apiKey)
+  }
+
+  return fetch(`${httpBaseUrl}${path}`, {
+    ...init,
+    headers,
+  })
 }
 
 async function httpGet<T>(path: string): Promise<T> {
@@ -354,6 +422,10 @@ function summarizeAnnotation(annotation: AnnotationV2) {
     componentHierarchy: source.componentHierarchy ?? null,
     source: location,
     updatedAt: annotation.updatedAt ?? annotation.createdAt ?? annotation.timestamp,
+    processingByAgentId: annotation.processingByAgentId ?? null,
+    processingByRunId: annotation.processingByRunId ?? null,
+    processingStartedAt: annotation.processingStartedAt ?? null,
+    processingExpiresAt: annotation.processingExpiresAt ?? null,
   }
 }
 
@@ -573,9 +645,15 @@ function watchForAnnotations(
                 sequence?: number
               }
 
-              if (event.type !== "annotation.created") continue
               if (!event.payload?.id) continue
               if (event.sequence === 0) continue
+              if (
+                event.type !== "annotation.created"
+                && !(
+                  event.type === "annotation.updated"
+                  && (event.payload.status ?? "pending") === "pending"
+                )
+              ) continue
 
               collected.set(event.payload.id, event.payload)
               if (event.sessionId) {
@@ -674,6 +752,90 @@ export async function handleTool(name: string, args: unknown): Promise<ToolResul
         }
         throw err
       }
+    }
+
+    case "agentation_v2_claim": {
+      const parsed = ClaimSchema.parse(args)
+      const response = await rawHttpRequest(`/v2/annotations/${parsed.annotationId}/claim`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agentId: parsed.agentId?.trim() || undefined,
+          runId: parsed.runId?.trim() || undefined,
+          ttlSeconds: parsed.ttlSeconds,
+        }),
+      })
+
+      if (response.status === 404) {
+        return error(`Annotation not found: ${parsed.annotationId}`)
+      }
+
+      const payload = await response.json() as {
+        claimed?: boolean
+        annotation?: AnnotationV2
+        runId?: string
+        ttlSeconds?: number
+        error?: string
+      }
+
+      if (response.status === 409) {
+        return success({
+          claimed: false,
+          runId: payload.runId ?? parsed.runId ?? null,
+          annotation: payload.annotation ? summarizeAnnotation(payload.annotation) : null,
+          message: payload.error ?? "Annotation is already being processed",
+        })
+      }
+
+      if (!response.ok) {
+        return error(payload.error ?? `Failed to claim annotation: ${parsed.annotationId}`)
+      }
+
+      return success({
+        claimed: true,
+        runId: payload.runId ?? parsed.runId ?? null,
+        ttlSeconds: payload.ttlSeconds ?? parsed.ttlSeconds ?? null,
+        annotation: payload.annotation ? summarizeAnnotation(payload.annotation) : null,
+      })
+    }
+
+    case "agentation_v2_release": {
+      const parsed = ReleaseSchema.parse(args)
+      const response = await rawHttpRequest(`/v2/annotations/${parsed.annotationId}/release`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agentId: parsed.agentId?.trim() || undefined,
+          runId: parsed.runId?.trim() || undefined,
+        }),
+      })
+
+      if (response.status === 404) {
+        return error(`Annotation not found: ${parsed.annotationId}`)
+      }
+
+      const payload = await response.json() as {
+        released?: boolean
+        annotation?: AnnotationV2
+        error?: string
+      }
+
+      if (response.status === 409) {
+        return success({
+          released: false,
+          annotation: payload.annotation ? summarizeAnnotation(payload.annotation) : null,
+          message: payload.error ?? "Annotation is not owned by this run",
+        })
+      }
+
+      if (!response.ok) {
+        return error(payload.error ?? `Failed to release annotation: ${parsed.annotationId}`)
+      }
+
+      return success({
+        released: true,
+        annotation: payload.annotation ? summarizeAnnotation(payload.annotation) : null,
+      })
     }
 
     case "agentation_v2_resolve": {

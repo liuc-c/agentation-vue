@@ -54,6 +54,7 @@ export function createRuntimeSyncBridge(
   let dirtyWhileFlushing = false
   let eventSource: EventSource | null = null
   let pathWatchTimer: ReturnType<typeof setInterval> | undefined
+  const closedSessionIds = new Set<string>()
 
   function emit(event: RuntimeSyncEvent): void {
     for (const listener of listeners) {
@@ -78,6 +79,15 @@ export function createRuntimeSyncBridge(
     try {
       const session = await apiGetSession(sync.endpoint, sid)
       sessionVerified = true
+
+      if (session.status === "closed") {
+        closedSessionIds.add(sid)
+        clearSessionId(path, storage.options)
+        stopEventSource()
+        sessionId = undefined
+        sessionVerified = false
+        return false
+      }
 
       const existingProjectId = session.projectId?.trim() || undefined
       const existingProjectRoot = typeof session.metadata?.localProjectRoot === "string"
@@ -232,7 +242,8 @@ export function createRuntimeSyncBridge(
 
     flushInFlight = (async () => {
       const sid = await ensureSession()
-      const pending = getUnsyncedAnnotations(pathname(), sid, storage.options)
+      const pending = (getUnsyncedAnnotations(pathname(), sid, storage.options) as StoredAnnotation[])
+        .filter((annotation) => !annotation._syncedTo || !closedSessionIds.has(annotation._syncedTo))
 
       if (pending.length === 0) {
         await reconcileFromServer(sid, "init")

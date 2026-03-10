@@ -16,7 +16,14 @@ export type AnnotationIntent = "fix" | "change" | "question" | "approve"
 
 export type AnnotationSeverity = "blocking" | "important" | "suggestion"
 
-export type AnnotationStatus = "pending" | "acknowledged" | "resolved" | "dismissed"
+export type AnnotationStatus = "pending" | "acknowledged" | "processing" | "resolved" | "dismissed"
+
+export interface AnnotationProcessingDetails {
+  processingByAgentId?: string
+  processingByRunId?: string
+  processingStartedAt?: string
+  processingExpiresAt?: string
+}
 
 export interface AnnotationThreadMessage {
   id: string
@@ -25,7 +32,7 @@ export interface AnnotationThreadMessage {
   timestamp: string | number
 }
 
-export interface AnnotationV2 {
+export interface AnnotationV2 extends AnnotationProcessingDetails {
   id: string
   schemaVersion: 1
   timestamp: string

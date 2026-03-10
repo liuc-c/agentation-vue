@@ -146,4 +146,149 @@ describe("createRuntimeSyncBridge", () => {
 
     bridge.dispose()
   })
+
+  it("creates a new session when the cached session was closed", async () => {
+    core.getSession.mockResolvedValueOnce({
+      id: "sess-existing",
+      url: "http://localhost:5173/",
+      status: "closed",
+      createdAt: "2026-03-09T00:00:00.000Z",
+      projectId: "agentation-vue",
+      annotations: [],
+    })
+    core.createSession.mockResolvedValueOnce({
+      id: "sess-new",
+      url: "http://localhost:5173/",
+      status: "active",
+      createdAt: "2026-03-10T00:00:00.000Z",
+      projectId: "agentation-vue",
+      annotations: [],
+    })
+
+    const { createRuntimeSyncBridge } = await import("./sync.ts")
+    const bridge = createRuntimeSyncBridge({
+      endpoint: "http://localhost:4748",
+      projectId: "agentation-vue",
+      autoSync: true,
+      debounceMs: 0,
+      ensureServer: false,
+    }, {
+      options: {},
+      load: () => [],
+      save: () => undefined,
+      clear: () => undefined,
+    })
+
+    await bridge.init()
+
+    expect(core.clearSessionId).toHaveBeenCalledWith("/", {})
+    expect(core.createSession).toHaveBeenCalledWith(
+      "http://localhost:4748",
+      "http://localhost:3000/",
+      "agentation-vue",
+      undefined,
+    )
+    expect(core.saveSessionId).toHaveBeenCalledWith("/", "sess-new", {})
+
+    bridge.dispose()
+  })
+
+  it("does not re-upsert annotations that belong to a closed session", async () => {
+    const closedAnnotation = {
+      id: "annotation-closed",
+      schemaVersion: 1 as const,
+      timestamp: "2026-03-09T00:00:00.000Z",
+      url: "http://localhost:3000/",
+      elementSelector: "button.primary",
+      comment: "Keep local after close",
+      source: {
+        framework: "vue" as const,
+        componentName: "App",
+        file: "src/App.vue",
+        line: 12,
+        resolver: "test",
+      },
+      _syncedTo: "sess-existing",
+    }
+    const newAnnotation = {
+      id: "annotation-new",
+      schemaVersion: 1 as const,
+      timestamp: "2026-03-10T00:00:00.000Z",
+      url: "http://localhost:3000/",
+      elementSelector: "button.secondary",
+      comment: "Sync to replacement session",
+      source: {
+        framework: "vue" as const,
+        componentName: "App",
+        file: "src/App.vue",
+        line: 24,
+        resolver: "test",
+      },
+    }
+
+    core.getSession
+      .mockResolvedValueOnce({
+        id: "sess-existing",
+        url: "http://localhost:5173/",
+        status: "closed",
+        createdAt: "2026-03-09T00:00:00.000Z",
+        projectId: "agentation-vue",
+        annotations: [],
+      })
+      .mockResolvedValueOnce({
+        id: "sess-new",
+        url: "http://localhost:5173/",
+        status: "active",
+        createdAt: "2026-03-10T00:00:00.000Z",
+        projectId: "agentation-vue",
+        annotations: [],
+      })
+    core.createSession.mockResolvedValueOnce({
+      id: "sess-new",
+      url: "http://localhost:5173/",
+      status: "active",
+      createdAt: "2026-03-10T00:00:00.000Z",
+      projectId: "agentation-vue",
+      annotations: [],
+    })
+    core.getUnsyncedAnnotations.mockReturnValue([
+      closedAnnotation,
+      newAnnotation,
+    ])
+
+    const { createRuntimeSyncBridge } = await import("./sync.ts")
+    const bridge = createRuntimeSyncBridge({
+      endpoint: "http://localhost:4748",
+      projectId: "agentation-vue",
+      autoSync: true,
+      debounceMs: 0,
+      ensureServer: false,
+    }, {
+      options: {},
+      load: () => [],
+      save: () => undefined,
+      clear: () => undefined,
+    })
+
+    await bridge.init()
+
+    expect(core.syncAnnotation).toHaveBeenCalledTimes(1)
+    expect(core.syncAnnotation).toHaveBeenCalledWith(
+      "http://localhost:4748",
+      "sess-new",
+      expect.objectContaining({
+        id: "annotation-new",
+      }),
+    )
+    expect(core.syncAnnotation).not.toHaveBeenCalledWith(
+      "http://localhost:4748",
+      "sess-new",
+      expect.objectContaining({
+        id: "annotation-closed",
+      }),
+    )
+    expect(core.markAnnotationsSynced).toHaveBeenCalledWith("/", ["annotation-new"], "sess-new", {})
+
+    bridge.dispose()
+  })
 })

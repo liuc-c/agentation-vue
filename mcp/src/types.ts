@@ -2,7 +2,14 @@
 // Shared Types
 // =============================================================================
 
-export type Annotation = {
+export type AnnotationProcessingDetails = {
+  processingByAgentId?: string;
+  processingByRunId?: string;
+  processingStartedAt?: string;
+  processingExpiresAt?: string;
+};
+
+export type Annotation = AnnotationProcessingDetails & {
   id: string;
   x: number; // % of viewport width
   y: number; // px from top of document (absolute) OR viewport (if isFixed)
@@ -42,7 +49,7 @@ export type Annotation = {
 
 export type AnnotationIntent = "fix" | "change" | "question" | "approve";
 export type AnnotationSeverity = "blocking" | "important" | "suggestion";
-export type AnnotationStatus = "pending" | "acknowledged" | "resolved" | "dismissed";
+export type AnnotationStatus = "pending" | "acknowledged" | "processing" | "resolved" | "dismissed";
 
 // -----------------------------------------------------------------------------
 // Session
@@ -64,6 +71,10 @@ export type SessionWithAnnotations = Session & {
   annotations: Annotation[];
 };
 
+export type SessionSummary = Session & {
+  annotationCount: number;
+};
+
 // -----------------------------------------------------------------------------
 // Vue / AnnotationV2 Schema
 // -----------------------------------------------------------------------------
@@ -80,7 +91,7 @@ export type SourceLocation = {
   resolver: string;
 };
 
-export type AnnotationV2 = {
+export type AnnotationV2 = AnnotationProcessingDetails & {
   id: string;
   schemaVersion: 1;
   timestamp: string;
@@ -106,6 +117,18 @@ export type AnnotationV2 = {
 
 export type SessionWithAnnotationsV2 = Session & {
   annotations: AnnotationV2[];
+};
+
+export type AnnotationClaim = {
+  agentId: string;
+  runId: string;
+  processingStartedAt: string;
+  processingExpiresAt: string;
+};
+
+export type AnnotationClaimOwner = {
+  agentId?: string;
+  runId?: string;
 };
 
 // -----------------------------------------------------------------------------
@@ -242,6 +265,9 @@ export interface AFSStore {
     status: AnnotationStatus,
     resolvedBy?: "human" | "agent"
   ): AnnotationV2 | undefined;
+  claimAnnotationV2(id: string, claim: AnnotationClaim): AnnotationV2 | undefined;
+  releaseAnnotationV2(id: string, owner?: AnnotationClaimOwner): AnnotationV2 | undefined;
+  requeueExpiredProcessingAnnotationsV2(nowIso?: string): number;
   addThreadMessageV2(
     annotationId: string,
     role: "human" | "agent",

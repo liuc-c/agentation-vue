@@ -17,6 +17,8 @@ import type {
   SessionWithAnnotations,
   SessionWithAnnotationsV2,
   Annotation,
+  AnnotationClaim,
+  AnnotationClaimOwner,
   AnnotationV2,
   AnnotationStatus,
   ThreadMessage,
@@ -65,6 +67,55 @@ function initializeStore(): AFSStore {
 // -----------------------------------------------------------------------------
 // In-Memory Store (fallback)
 // -----------------------------------------------------------------------------
+
+function clearProcessingState(annotation: {
+  processingByAgentId?: string
+  processingByRunId?: string
+  processingStartedAt?: string
+  processingExpiresAt?: string
+}): void {
+  delete annotation.processingByAgentId
+  delete annotation.processingByRunId
+  delete annotation.processingStartedAt
+  delete annotation.processingExpiresAt
+}
+
+function applyResolvedState(
+  annotation: { resolvedAt?: string; resolvedBy?: "human" | "agent" },
+  status: AnnotationStatus,
+  resolvedBy?: "human" | "agent",
+): void {
+  if (status === "resolved" || status === "dismissed") {
+    annotation.resolvedAt = new Date().toISOString()
+    annotation.resolvedBy = resolvedBy || "agent"
+    return
+  }
+
+  delete annotation.resolvedAt
+  delete annotation.resolvedBy
+}
+
+function isAnnotationProcessingExpired(annotation: AnnotationV2, nowIso: string): boolean {
+  return (annotation.status ?? "pending") === "processing"
+    && typeof annotation.processingExpiresAt === "string"
+    && annotation.processingExpiresAt <= nowIso
+}
+
+function matchesClaimOwner(annotation: AnnotationV2, owner?: AnnotationClaimOwner): boolean {
+  if (!owner || (!owner.agentId && !owner.runId)) {
+    return true
+  }
+
+  if (owner.agentId && annotation.processingByAgentId !== owner.agentId) {
+    return false
+  }
+
+  if (owner.runId && annotation.processingByRunId !== owner.runId) {
+    return false
+  }
+
+  return true
+}
 
 function createMemoryStore(): AFSStore {
   const sessions = new Map<string, Session>();
@@ -286,123 +337,185 @@ function createMemoryStore(): AFSStore {
 
     // -- Annotations V2 (Vue schema) ------------------------------------------
 
-	    addAnnotationV2(sessionId: string, data: AnnotationV2): AnnotationV2 | undefined {
-	      const session = sessions.get(sessionId);
-	      if (!session) return undefined;
+    addAnnotationV2(sessionId: string, data: AnnotationV2): AnnotationV2 | undefined {
+      const session = sessions.get(sessionId);
+      if (!session) return undefined;
 
       // Idempotent: return existing if same ID
       const existing = annotationsV2.get(data.id);
       if (existing) return existing;
 
-	      const annotation: AnnotationV2 = {
-	        ...data,
-	        sessionId,
-	        status: data.status ?? "pending",
-	        createdAt: new Date().toISOString(),
-	      };
+      const annotation: AnnotationV2 = {
+        ...data,
+        sessionId,
+        status: data.status ?? "pending",
+        createdAt: new Date().toISOString(),
+      };
 
-	      annotationsV2.set(annotation.id, annotation);
-	      const event = eventBus.emit("annotation.created", sessionId, annotation);
-	      events.push(event);
-	      return annotation;
-	    },
+      annotationsV2.set(annotation.id, annotation);
+      const event = eventBus.emit("annotation.created", sessionId, annotation);
+      events.push(event);
+      return annotation;
+    },
 
     getAnnotationV2(id: string): AnnotationV2 | undefined {
       return annotationsV2.get(id);
     },
 
-	    updateAnnotationV2(
-	      id: string,
-	      data: Partial<Omit<AnnotationV2, "id" | "sessionId" | "createdAt">>
-	    ): AnnotationV2 | undefined {
-	      const annotation = annotationsV2.get(id);
-	      if (!annotation) return undefined;
+    updateAnnotationV2(
+      id: string,
+      data: Partial<Omit<AnnotationV2, "id" | "sessionId" | "createdAt">>
+    ): AnnotationV2 | undefined {
+      const annotation = annotationsV2.get(id);
+      if (!annotation) return undefined;
 
-	      Object.assign(annotation, data, { updatedAt: new Date().toISOString() });
-	      if (annotation.sessionId) {
-	        const event = eventBus.emit("annotation.updated", annotation.sessionId, annotation);
-	        events.push(event);
-	      }
-	      return annotation;
-	    },
+      Object.assign(annotation, data, { updatedAt: new Date().toISOString() });
+      if (annotation.sessionId) {
+        const event = eventBus.emit("annotation.updated", annotation.sessionId, annotation);
+        events.push(event);
+      }
+      return annotation;
+    },
 
-	    updateAnnotationV2Status(
-	      id: string,
-	      status: AnnotationStatus,
-	      resolvedBy?: "human" | "agent",
-	    ): AnnotationV2 | undefined {
-	      const annotation = annotationsV2.get(id);
-	      if (!annotation) return undefined;
+    updateAnnotationV2Status(
+      id: string,
+      status: AnnotationStatus,
+      resolvedBy?: "human" | "agent",
+    ): AnnotationV2 | undefined {
+      const annotation = annotationsV2.get(id);
+      if (!annotation) return undefined;
 
-	      annotation.status = status;
-	      annotation.updatedAt = new Date().toISOString();
+      annotation.status = status;
+      annotation.updatedAt = new Date().toISOString();
 
-	      if (status === "resolved" || status === "dismissed") {
-	        annotation.resolvedAt = new Date().toISOString();
-	        annotation.resolvedBy = resolvedBy || "agent";
-	      } else {
-	        delete annotation.resolvedAt;
-	        delete annotation.resolvedBy;
-	      }
+      if (status !== "processing") {
+        clearProcessingState(annotation);
+      }
+      applyResolvedState(annotation, status, resolvedBy);
 
-	      if (annotation.sessionId) {
-	        const event = eventBus.emit("annotation.updated", annotation.sessionId, annotation);
-	        events.push(event);
-	      }
+      if (annotation.sessionId) {
+        const event = eventBus.emit("annotation.updated", annotation.sessionId, annotation);
+        events.push(event);
+      }
 
-	      return annotation;
-	    },
+      return annotation;
+    },
 
-	    addThreadMessageV2(
-	      annotationId: string,
-	      role: "human" | "agent",
-	      content: string,
-	    ): AnnotationV2 | undefined {
-	      const annotation = annotationsV2.get(annotationId);
-	      if (!annotation) return undefined;
+    claimAnnotationV2(id: string, claim: AnnotationClaim): AnnotationV2 | undefined {
+      const annotation = annotationsV2.get(id);
+      if (!annotation) return undefined;
 
-	      const message: ThreadMessage = {
-	        id: generateId(),
-	        role,
-	        content,
-	        timestamp: new Date().toISOString(),
-	      };
+      if (
+        (annotation.status ?? "pending") === "processing"
+        && annotation.processingByAgentId === claim.agentId
+        && annotation.processingByRunId === claim.runId
+      ) {
+        return annotation
+      }
 
-	      annotation.thread = [...(annotation.thread || []), message];
-	      annotation.updatedAt = new Date().toISOString();
+      if ((annotation.status ?? "pending") !== "pending") {
+        return undefined
+      }
 
-	      if (annotation.sessionId) {
-	        const updatedEvent = eventBus.emit("annotation.updated", annotation.sessionId, annotation);
-	        events.push(updatedEvent);
-	        const threadEvent = eventBus.emit("thread.message", annotation.sessionId, message);
-	        events.push(threadEvent);
-	      }
+      annotation.status = "processing";
+      annotation.processingByAgentId = claim.agentId;
+      annotation.processingByRunId = claim.runId;
+      annotation.processingStartedAt = claim.processingStartedAt;
+      annotation.processingExpiresAt = claim.processingExpiresAt;
+      annotation.updatedAt = new Date().toISOString();
+      delete annotation.resolvedAt;
+      delete annotation.resolvedBy;
 
-	      return annotation;
-	    },
+      if (annotation.sessionId) {
+        const event = eventBus.emit("annotation.updated", annotation.sessionId, annotation);
+        events.push(event);
+      }
 
-	    getPendingAnnotationsV2(sessionId: string): AnnotationV2[] {
-	      return Array.from(annotationsV2.values()).filter(
-	        (a) => a.sessionId === sessionId && (a.status ?? "pending") === "pending",
-	      );
-	    },
+      return annotation;
+    },
 
-	    getSessionAnnotationsV2(sessionId: string): AnnotationV2[] {
-	      return Array.from(annotationsV2.values()).filter(
-	        (a) => a.sessionId === sessionId
+    releaseAnnotationV2(id: string, owner?: AnnotationClaimOwner): AnnotationV2 | undefined {
+      const annotation = annotationsV2.get(id);
+      if (!annotation) return undefined;
+      if ((annotation.status ?? "pending") !== "processing") return undefined;
+      if (!matchesClaimOwner(annotation, owner)) return undefined;
+
+      annotation.status = "pending";
+      annotation.updatedAt = new Date().toISOString();
+      clearProcessingState(annotation);
+      delete annotation.resolvedAt;
+      delete annotation.resolvedBy;
+
+      if (annotation.sessionId) {
+        const event = eventBus.emit("annotation.updated", annotation.sessionId, annotation);
+        events.push(event);
+      }
+
+      return annotation;
+    },
+
+    requeueExpiredProcessingAnnotationsV2(nowIso = new Date().toISOString()): number {
+      const expiredIds = Array.from(annotationsV2.values())
+        .filter((annotation) => isAnnotationProcessingExpired(annotation, nowIso))
+        .map((annotation) => annotation.id)
+
+      for (const annotationId of expiredIds) {
+        this.releaseAnnotationV2(annotationId)
+      }
+
+      return expiredIds.length
+    },
+
+    addThreadMessageV2(
+      annotationId: string,
+      role: "human" | "agent",
+      content: string,
+    ): AnnotationV2 | undefined {
+      const annotation = annotationsV2.get(annotationId);
+      if (!annotation) return undefined;
+
+      const message: ThreadMessage = {
+        id: generateId(),
+        role,
+        content,
+        timestamp: new Date().toISOString(),
+      };
+
+      annotation.thread = [...(annotation.thread || []), message];
+      annotation.updatedAt = new Date().toISOString();
+
+      if (annotation.sessionId) {
+        const updatedEvent = eventBus.emit("annotation.updated", annotation.sessionId, annotation);
+        events.push(updatedEvent);
+        const threadEvent = eventBus.emit("thread.message", annotation.sessionId, message);
+        events.push(threadEvent);
+      }
+
+      return annotation;
+    },
+
+    getPendingAnnotationsV2(sessionId: string): AnnotationV2[] {
+      return Array.from(annotationsV2.values()).filter(
+        (a) => a.sessionId === sessionId && (a.status ?? "pending") === "pending",
       );
     },
 
-	    deleteAnnotationV2(id: string): AnnotationV2 | undefined {
-	      const annotation = annotationsV2.get(id);
-	      if (!annotation) return undefined;
-	      annotationsV2.delete(id);
-	      if (annotation.sessionId) {
-	        const event = eventBus.emit("annotation.deleted", annotation.sessionId, annotation);
-	        events.push(event);
-	      }
-	      return annotation;
-	    },
+    getSessionAnnotationsV2(sessionId: string): AnnotationV2[] {
+      return Array.from(annotationsV2.values()).filter(
+        (a) => a.sessionId === sessionId
+      );
+    },
+
+    deleteAnnotationV2(id: string): AnnotationV2 | undefined {
+      const annotation = annotationsV2.get(id);
+      if (!annotation) return undefined;
+      annotationsV2.delete(id);
+      if (annotation.sessionId) {
+        const event = eventBus.emit("annotation.deleted", annotation.sessionId, annotation);
+        events.push(event);
+      }
+      return annotation;
+    },
 
     getEventsSince(sessionId: string, sequence: number): AFSEvent[] {
       return events.filter(
@@ -531,6 +644,18 @@ export function updateAnnotationV2Status(
   resolvedBy?: "human" | "agent",
 ): AnnotationV2 | undefined {
   return getStore().updateAnnotationV2Status(id, status, resolvedBy);
+}
+
+export function claimAnnotationV2(id: string, claim: AnnotationClaim): AnnotationV2 | undefined {
+  return getStore().claimAnnotationV2(id, claim);
+}
+
+export function releaseAnnotationV2(id: string, owner?: AnnotationClaimOwner): AnnotationV2 | undefined {
+  return getStore().releaseAnnotationV2(id, owner);
+}
+
+export function requeueExpiredProcessingAnnotationsV2(nowIso?: string): number {
+  return getStore().requeueExpiredProcessingAnnotationsV2(nowIso);
 }
 
 export function addThreadMessageV2(
