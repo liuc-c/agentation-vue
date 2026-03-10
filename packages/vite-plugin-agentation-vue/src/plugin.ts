@@ -1,14 +1,11 @@
-import { spawn } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import type { Plugin } from "vite"
 import VueTracer from "vite-plugin-vue-tracer"
 import {
   DEFAULT_AGENTATION_SYNC_OPTIONS,
-  resolveMcpEndpoint,
   resolveOptions,
   type AgentationVueOptions,
-  type AgentationVueSyncOptions,
 } from "./types.ts"
 import {
   INIT_SCRIPT_PATH,
@@ -17,7 +14,7 @@ import {
   loadVirtualModule,
   resolveVirtualId,
 } from "./virtual.ts"
-import { createSharedServerSpawnSpec } from "./shared-server.ts"
+import { ensureSharedCompanionServer } from "./ensure-server/index.ts"
 
 // ---------------------------------------------------------------------------
 // Terminal logging (ANSI colors + ASCII art)
@@ -55,8 +52,6 @@ function logTerm(message: string, detail?: string): void {
   const d = detail ? ` ${c.dim}(${detail})${c.reset}` : ""
   console.log(`  ${PREFIX} ${c.green}${message}${c.reset}${d}`)
 }
-
-const ensuredSharedServers = new Map<string, Promise<void>>()
 
 function hasWorkspaceMarker(dir: string): boolean {
   if (
@@ -112,166 +107,6 @@ function inferWorkspaceProjectId(rootDir?: string): string | undefined {
   }
 }
 
-function normalizeUrl(input: string): string {
-  return input.replace(/\/+$/, "")
-}
-
-function parsePort(input: string): number | null {
-  try {
-    const url = new URL(input)
-    const fallback = url.protocol === "https:" ? 443 : 80
-    const port = parseInt(url.port || String(fallback), 10)
-    return Number.isFinite(port) ? port : null
-  } catch {
-    return null
-  }
-}
-
-async function isServerHealthy(baseUrl: string): Promise<boolean> {
-  try {
-    const response = await fetch(`${normalizeUrl(baseUrl)}/health`, {
-      signal: AbortSignal.timeout(800),
-    })
-    return response.ok
-  } catch {
-    return false
-  }
-}
-
-async function hasSessionEventsCapability(baseUrl: string): Promise<boolean> {
-  try {
-    const response = await fetch(
-      `${normalizeUrl(baseUrl)}/v2/sessions/__agentation_probe__/events`,
-      { signal: AbortSignal.timeout(800) },
-    )
-
-    if (response.ok) {
-      return true
-    }
-
-    if (response.status !== 404) {
-      return false
-    }
-
-    const body = await response.text()
-    return body.includes("Session not found")
-  } catch {
-    return false
-  }
-}
-
-async function waitForSharedServer(
-  apiEndpoint: string,
-  mcpEndpoint: string | undefined,
-  timeoutMs = 8000,
-): Promise<boolean> {
-  const startedAt = Date.now()
-  while (Date.now() - startedAt < timeoutMs) {
-    const [apiHealthy, mcpHealthy] = await Promise.all([
-      isServerHealthy(apiEndpoint),
-      mcpEndpoint ? isServerHealthy(mcpEndpoint) : Promise.resolve(true),
-    ])
-
-    if (apiHealthy && mcpHealthy) {
-      return true
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 350))
-  }
-
-  return false
-}
-
-function ensureSharedMcpServer(sync: AgentationVueSyncOptions): Promise<void> {
-  if (sync.ensureServer === false) {
-    return Promise.resolve()
-  }
-
-  const apiEndpoint = normalizeUrl(sync.endpoint)
-  const mcpEndpoint = resolveMcpEndpoint(sync)
-  const key = `${apiEndpoint}|${mcpEndpoint ?? "none"}`
-  const existing = ensuredSharedServers.get(key)
-  if (existing) {
-    return existing
-  }
-
-  const promise = (async () => {
-    const [apiHealthy, apiCompatible, mcpHealthy] = await Promise.all([
-      isServerHealthy(apiEndpoint),
-      hasSessionEventsCapability(apiEndpoint),
-      mcpEndpoint ? isServerHealthy(mcpEndpoint) : Promise.resolve(true),
-    ])
-
-    if (apiHealthy && apiCompatible && mcpHealthy) {
-      logTerm("reusing shared MCP server ♻️", `${apiEndpoint}${mcpEndpoint ? ` + ${mcpEndpoint}` : ""}`)
-      return
-    }
-
-    if (apiHealthy && !apiCompatible) {
-      logTerm(
-        "shared MCP server incompatible ⚠️",
-        `${apiEndpoint} answered /health but is missing the required /v2 session event API; stop the old server or change sync ports`,
-      )
-      return
-    }
-
-    const apiPort = parsePort(apiEndpoint)
-    const mcpPort = mcpEndpoint ? parsePort(mcpEndpoint) : null
-
-    if (apiPort == null || mcpPort == null) {
-      logTerm(
-        "shared MCP auto-start skipped ⚠️",
-        "sync.endpoint and sync.mcpEndpoint must include explicit ports",
-      )
-      return
-    }
-
-    const spawnSpec = createSharedServerSpawnSpec(apiPort, mcpPort)
-    if (!spawnSpec) {
-      logTerm(
-        "shared MCP auto-start skipped ⚠️",
-        "agentation-vue-mcp CLI not found; install the dependency or start the server manually",
-      )
-      return
-    }
-
-    try {
-      const child = spawn(spawnSpec.command, spawnSpec.args, {
-        detached: true,
-        stdio: "ignore",
-        env: process.env,
-        windowsHide: true,
-      })
-
-      child.on("error", (error) => {
-        console.warn("[agentation] Failed to spawn shared MCP server:", error.message)
-      })
-      child.unref()
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      logTerm(
-        "shared MCP auto-start skipped ⚠️",
-        `failed to spawn bundled MCP server: ${message}`,
-      )
-      return
-    }
-
-    const ready = await waitForSharedServer(apiEndpoint, mcpEndpoint)
-    if (ready) {
-      logTerm("shared MCP server ready ✅", `${apiEndpoint}${mcpEndpoint ? ` + ${mcpEndpoint}` : ""}`)
-      return
-    }
-
-    logTerm(
-      "shared MCP server still starting ⏳",
-      "health checks not ready yet; if this persists, start agentation-vue-mcp server manually",
-    )
-  })()
-
-  ensuredSharedServers.set(key, promise)
-  return promise
-}
-
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -303,6 +138,24 @@ function serveOnly(plugin: Plugin): Plugin {
   }
 }
 
+function bindServerCloseCleanup(
+  server: {
+    httpServer?: { once?(event: "close", listener: () => void): void } | null
+    watcher?: { once?(event: "close", listener: () => void): void }
+  },
+  cleanup: () => Promise<void>,
+): void {
+  let settled = false
+  const onClose = () => {
+    if (settled) return
+    settled = true
+    void cleanup()
+  }
+
+  server.httpServer?.once?.("close", onClose)
+  server.watcher?.once?.("close", onClose)
+}
+
 // ---------------------------------------------------------------------------
 // Plugin factory
 // ---------------------------------------------------------------------------
@@ -317,6 +170,7 @@ function serveOnly(plugin: Plugin): Plugin {
  */
 function createShellPlugin(options: AgentationVueOptions): Plugin {
   let resolved = resolveOptions(options, "build")
+  let sharedCompanionRegistration: { dispose(): Promise<void> } | null = null
 
   return {
     name: "vite-plugin-agentation-vue",
@@ -363,7 +217,20 @@ function createShellPlugin(options: AgentationVueOptions): Plugin {
 
     async configureServer(server) {
       if (resolved.enabled && resolved.sync) {
-        await ensureSharedMcpServer(resolved.sync)
+        sharedCompanionRegistration = await ensureSharedCompanionServer(
+          resolved.sync,
+          logTerm,
+          {
+            projectId: resolved.projectId,
+            projectRoot: resolved.projectRoot,
+          },
+        )
+
+        bindServerCloseCleanup(server, async () => {
+          const registration = sharedCompanionRegistration
+          sharedCompanionRegistration = null
+          await registration?.dispose()
+        })
       }
 
       server.middlewares.use((req, res, next) => {

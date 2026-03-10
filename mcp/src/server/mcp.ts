@@ -21,7 +21,7 @@ import type {
   SessionWithAnnotationsV2,
 } from "../types.js"
 
-let httpBaseUrl = "http://localhost:4747"
+let httpBaseUrl = "http://localhost:4748"
 let apiKey: string | undefined
 
 export function setHttpBaseUrl(url: string): void {
@@ -1053,6 +1053,46 @@ async function handleLegacySse(req: IncomingMessage, res: ServerResponse): Promi
   res.end(JSON.stringify({ error: "Method not allowed" }))
 }
 
+export function isMcpTransportPath(pathname: string): boolean {
+  return pathname === "/mcp" || pathname === "/sse" || pathname === "/messages"
+}
+
+export function buildMcpTransportUrls(origin: string): {
+  streamableHttp: string
+  sse: string
+} {
+  return {
+    streamableHttp: `${origin}/mcp`,
+    sse: `${origin}/sse`,
+  }
+}
+
+export async function handleMcpTransportRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+): Promise<void> {
+  const method = req.method || "GET"
+
+  if (method === "OPTIONS") {
+    handleCors(res)
+    return
+  }
+
+  if (pathname === "/mcp") {
+    await handleStreamableHttp(req, res)
+    return
+  }
+
+  if (pathname === "/sse" || pathname === "/messages") {
+    await handleLegacySse(req, res)
+    return
+  }
+
+  res.writeHead(404, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" })
+  res.end(JSON.stringify({ error: "Not found" }))
+}
+
 export function startMcpHttpServer(port: number, baseUrl?: string): HttpServer {
   if (baseUrl) {
     setHttpBaseUrl(baseUrl)
@@ -1071,21 +1111,14 @@ export function startMcpHttpServer(port: number, baseUrl?: string): HttpServer {
       res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" })
       res.end(JSON.stringify({
         status: "ok",
-        transport: {
-          streamableHttp: `${url.origin}/mcp`,
-          sse: `${url.origin}/sse`,
-        },
+        transport: buildMcpTransportUrls(url.origin),
         apiBaseUrl: httpBaseUrl,
       }))
       return
     }
 
-    if (pathname === "/mcp") {
-      return handleStreamableHttp(req, res)
-    }
-
-    if (pathname === "/sse" || pathname === "/messages") {
-      return handleLegacySse(req, res)
+    if (isMcpTransportPath(pathname)) {
+      return handleMcpTransportRequest(req, res, pathname)
     }
 
     res.writeHead(404, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" })
@@ -1101,7 +1134,7 @@ export function startMcpHttpServer(port: number, baseUrl?: string): HttpServer {
     console.error("[MCP] HTTP transport server error:", error.message)
   })
 
-  server.listen(port, () => {
+  server.listen(port, "127.0.0.1", () => {
     console.error(
       `[MCP] Agentation V2 transport listening on http://localhost:${port} (/mcp, /sse) -> API ${httpBaseUrl}`,
     )

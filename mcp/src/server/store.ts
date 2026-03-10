@@ -77,13 +77,14 @@ function createMemoryStore(): AFSStore {
   }
 
   return {
-    createSession(url: string, projectId?: string): Session {
+    createSession(url: string, projectId?: string, metadata?: Record<string, unknown>): Session {
       const session: Session = {
         id: generateId(),
         url,
         status: "active",
         createdAt: new Date().toISOString(),
         projectId,
+        metadata,
       };
       sessions.set(session.id, session);
 
@@ -123,11 +124,17 @@ function createMemoryStore(): AFSStore {
       };
     },
 
-    updateSessionProjectId(id: string, projectId?: string): Session | undefined {
+    updateSessionProjectId(id: string, projectId?: string, metadata?: Record<string, unknown>): Session | undefined {
       const session = sessions.get(id);
       if (!session) return undefined;
 
-      session.projectId = projectId;
+      session.projectId = projectId ?? session.projectId;
+      session.metadata = metadata
+        ? {
+            ...(session.metadata ?? {}),
+            ...metadata,
+          }
+        : session.metadata;
       session.updatedAt = new Date().toISOString();
 
       const event = eventBus.emit("session.updated", id, session);
@@ -423,8 +430,8 @@ export const store = {
 };
 
 // Direct function exports for backwards compatibility
-export function createSession(url: string, projectId?: string): Session {
-  return getStore().createSession(url, projectId);
+export function createSession(url: string, projectId?: string, metadata?: Record<string, unknown>): Session {
+  return getStore().createSession(url, projectId, metadata);
 }
 
 export function getSession(id: string): Session | undefined {
@@ -435,8 +442,12 @@ export function getSessionWithAnnotations(id: string): SessionWithAnnotations | 
   return getStore().getSessionWithAnnotations(id);
 }
 
-export function updateSessionProjectId(id: string, projectId?: string): Session | undefined {
-  return getStore().updateSessionProjectId(id, projectId);
+export function updateSessionProjectId(
+  id: string,
+  projectId?: string,
+  metadata?: Record<string, unknown>,
+): Session | undefined {
+  return getStore().updateSessionProjectId(id, projectId, metadata);
 }
 
 export function updateSessionStatus(id: string, status: SessionStatus): Session | undefined {

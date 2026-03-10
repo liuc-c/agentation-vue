@@ -28,6 +28,8 @@ export interface Messages {
     copyJsonAria: string
     clearAll: string
     clearAllAria: string
+    agentWorkspace: string
+    openAgentWorkspaceAria: string
     settings: string
     toggleSettingsAria: string
     closeToolbar: string
@@ -77,16 +79,46 @@ export interface Messages {
     clearOnCopy: string
     blockPageInteractions: string
     componentSource: string
-    manageMcpWebhooks: string
+    manageAgents: string
+    agentWorkspaceDescription: string
+    companionStatus: string
+    companionEndpointLabel: string
+    mcpEndpointLabel: string
+    noAgentSelected: string
+    selectAgentToStart: string
+    connectAgentToStart: string
+    sendPendingToStart: string
+    installAgentHint: string
+    installAgent: string
+    openHomepage: string
+    currentAgent: string
+    primaryAction: string
+    availableOnMachine: string
+    notInstalledOnMachine: string
     getStarted: string
     mcpConnection: string
     mcpLearnMore: string
     mcpStatusConnected: string
     mcpStatusDisconnected: string
-    webhooks: string
-    webhooksDescription: string
-    webhooksAutoSend: string
-    webhooksUrlPlaceholder: string
+    agentsConnection: string
+    agentSelection: string
+    availableAgents: string
+    autoSendToAgent: string
+    autoSendDescription: string
+    manualSend: string
+    cancelSend: string
+    connectAgent: string
+    disconnectAgent: string
+    activeAgent: string
+    useAgent: string
+    noAgentsAvailable: string
+    agentStatusReady: string
+    agentStatusAvailable: string
+    agentStatusMissing: string
+    agentStatusConnecting: string
+    agentStatusBusy: string
+    agentStatusError: string
+    agentLastActivity: string
     outputDetailHelp: string
     componentSourceHelp: string
     blockInteractionsHelp: string
@@ -118,6 +150,9 @@ export interface Messages {
     sourceUnavailableArea: string
     remoteSyncUpdated: (count: number) => string
     syncFailed: (message: string) => string
+    agentBridgeFailed: (message: string) => string
+    agentDispatchFailed: (message: string) => string
+    agentDispatchSucceeded: (message: string) => string
   }
 }
 

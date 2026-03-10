@@ -48,6 +48,8 @@
     "test": "vitest run --config vitest.config.ts --passWithNoTests"
   },
   "dependencies": {
+    "@iconify-json/vscode-icons": "^1.2.44",
+    "@iconify/vue": "^5.0.0",
     "@liuovo/agentation-vue-core": "workspace:*",
     "@vueuse/core": "^14.2.1",
     "lucide-vue-next": "^0.577.0"

@@ -37,7 +37,8 @@ The plugin automatically injects the annotation overlay in dev mode. It's disabl
 | `locale` | `"en" \| "zh-CN"` | `"en"` | Default UI locale |
 | `storagePrefix` | `string` | `"agentation-vue-"` | localStorage key prefix |
 | `outputDetail` | `"compact" \| "standard" \| "detailed" \| "forensic"` | `"standard"` | Level of detail in export output |
-| `sync` | `{ endpoint?: string, mcpEndpoint?: string, projectId?: string, autoSync?: boolean, debounceMs?: number, ensureServer?: boolean } \| false` | enabled in dev | Shared Agentation V2 sync + MCP workflow configuration |
+| `sync` | `{ endpoint?: string, mcpEndpoint?: string, projectId?: string, autoSync?: boolean, debounceMs?: number, ensureServer?: boolean } \| false` | enabled in dev | Unified Agentation companion sync configuration |
+| `agent` | `{ enabled?: boolean, autoSend?: boolean } \| false` | enabled in dev, `autoSend` off | Local ACP companion bridge and auto-dispatch defaults |
 | `inspector` | `"tracer"` | `"tracer"` | Source resolution strategy |
 
 ## Sync Configuration
@@ -55,8 +56,7 @@ To customize the shared Agentation server endpoints:
 ```ts
 agentation({
   sync: {
-    endpoint: "http://localhost:4747",
-    mcpEndpoint: "http://localhost:4748",
+    endpoint: "http://localhost:4748",
     projectId: "demo-app", // defaults to the Vite root folder name
     autoSync: true,     // default
     debounceMs: 400,    // default
@@ -65,11 +65,31 @@ agentation({
 })
 ```
 
-When `ensureServer` is enabled, the plugin health-checks the configured ports,
-reuses an existing Agentation server if one is already running, and otherwise
-launches the bundled `agentation-vue-mcp` CLI with the current Node runtime
-during `vite dev`. If auto-start is unavailable, the plugin logs a warning and
-continues so you can start the server manually.
+When `ensureServer` is enabled, the plugin health-checks the configured
+companion endpoint, reuses an existing Agentation server if one is already
+running, and otherwise launches the bundled `agentation-vue-mcp` CLI with the
+current Node runtime during `vite dev`. If auto-start is unavailable, the
+plugin logs a warning and continues so you can start the server manually.
+
+## Local Agent Bridge
+
+The local agent bridge is enabled by default in dev and uses the shared
+Agentation API as a companion process. Configure the UI default like this:
+
+```ts
+agentation({
+  agent: {
+    enabled: true,
+    autoSend: false,
+  },
+})
+```
+
+Then initialize local ACP-compatible agents on your machine:
+
+```bash
+agentation-vue-mcp agents init
+```
 
 ## Nuxt Setup
 

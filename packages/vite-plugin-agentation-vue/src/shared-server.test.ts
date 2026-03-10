@@ -51,14 +51,12 @@ describe("shared server spawn helpers", () => {
   it("creates a node-based spawn spec for the bundled MCP CLI", async () => {
     const { createSharedServerSpawnSpec } = await import("./shared-server.ts")
 
-    expect(createSharedServerSpawnSpec(4747, 4748, () => "/tmp/agentation-vue-mcp-cli.js")).toEqual({
+    expect(createSharedServerSpawnSpec(4748, () => "/tmp/agentation-vue-mcp-cli.js")).toEqual({
       command: process.execPath,
       args: [
         "/tmp/agentation-vue-mcp-cli.js",
         "server",
         "--port",
-        "4747",
-        "--mcp-port",
         "4748",
         "--no-stdio",
       ],
@@ -68,6 +66,6 @@ describe("shared server spawn helpers", () => {
   it("skips auto-start when no MCP CLI can be resolved", async () => {
     const { createSharedServerSpawnSpec } = await import("./shared-server.ts")
 
-    expect(createSharedServerSpawnSpec(4747, 4748, () => null)).toBeNull()
+    expect(createSharedServerSpawnSpec(4748, () => null)).toBeNull()
   })
 })

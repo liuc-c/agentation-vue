@@ -2,7 +2,11 @@
 
 MCP (Model Context Protocol) server for Agentation - visual feedback for AI coding agents.
 
-This package provides an MCP server that allows AI coding agents (like Claude Code) to receive and respond to web page annotations created with the Agentation toolbar.
+This package provides the local Agentation companion:
+
+- V2 browser sync API for the toolbar
+- MCP tools so coding agents can read and resolve annotations
+- ACP-compatible local agent bridge so the page can notify local agents directly
 
 ## Installation
 
@@ -14,12 +18,32 @@ pnpm add agentation-vue-mcp
 
 ## Quick Start
 
-### 1. Add to your agent
+### 1. Start the local companion
+
+```bash
+agentation-vue-mcp server --port 4748
+```
+
+This starts the unified local companion on one port:
+- **Browser sync API** (`/v2/*`) - receives annotations from the Vue plugin
+- **MCP transport server** (`/mcp` and `/sse`) - exposed on the same port
+- **MCP stdio server** - enabled by default for Claude Code and other stdio clients
+
+### 2. Initialize local agents
+
+```bash
+agentation-vue-mcp agents init
+agentation-vue-mcp agents doctor
+```
+
+This writes `~/.agentation/agents.json` and probes local ACP-compatible agent commands.
+
+### 3. Add MCP tools to your agent
 
 The fastest way to configure Agentation across any supported agent:
 
 ```bash
-npx add-mcp "npx -y agentation-vue-mcp server --port 4747 --mcp-port 4748"
+npx add-mcp "npx -y agentation-vue-mcp server --port 4748"
 ```
 
 Uses [add-mcp](https://github.com/neondatabase/add-mcp) to auto-detect installed agents (Claude Code, Cursor, Codex, Windsurf, and more).
@@ -27,22 +51,11 @@ Uses [add-mcp](https://github.com/neondatabase/add-mcp) to auto-detect installed
 Or for Claude Code specifically:
 
 ```bash
-claude mcp add agentation -- npx agentation-vue-mcp server --port 4747 --mcp-port 4748
+claude mcp add agentation -- npx agentation-vue-mcp server --port 4748
 ```
 
 
-### 2. Start the server
-
-```bash
-agentation-vue-mcp server --port 4747 --mcp-port 4748
-```
-
-This starts both:
-- **Browser sync API** (port 4747) - receives annotations from the Vue plugin
-- **MCP transport server** (port 4748) - exposes `/mcp` and `/sse`
-- **MCP stdio server** - enabled by default for Claude Code and other stdio clients
-
-### 3. Verify your setup
+### 4. Verify your setup
 
 ```bash
 agentation-vue-mcp doctor
@@ -52,6 +65,7 @@ agentation-vue-mcp doctor
 
 ```bash
 agentation-vue-mcp init                    # Setup wizard (registers via claude mcp add)
+agentation-vue-mcp agents [list|init|doctor]
 agentation-vue-mcp server [options]        # Start the annotation server
 agentation-vue-mcp doctor                  # Check your setup
 agentation-vue-mcp help                    # Show help
@@ -60,11 +74,10 @@ agentation-vue-mcp help                    # Show help
 ### Server Options
 
 ```bash
---port <port>      # Browser sync API port (default: 4747)
---mcp-port <port>  # MCP transport port for /mcp and /sse (default: 4748)
---mcp-only         # Skip browser API server and only expose MCP transports
---http-url <url>   # Browser API base URL for MCP tools to fetch from
---no-stdio         # Disable stdio MCP transport and only expose network transports
+--port <port>      # Unified companion port for /v2, /mcp, and /sse (default: 4748)
+--mcp-only         # Skip the local HTTP companion and only expose stdio MCP
+--http-url <url>   # Agentation API base URL for MCP tools to fetch from
+--no-stdio         # Disable stdio MCP transport
 ```
 
 ## MCP Tools
@@ -111,6 +124,16 @@ The browser sync API provides a V2 REST API for the Vue toolbar and runtime:
 ### Events (SSE)
 - `GET /v2/sessions/:id/events` - Session event stream with replay support
 - `GET /v2/events` - Global event stream, optionally `?projectFilter=...`
+- `GET /v2/agents/events?projectId=...` - Local agent status and dispatch events
+
+### Local Agent Bridge
+
+- `GET /v2/agents?projectId=...` - List local agents and current dispatch state
+- `POST /v2/agents/select` - Select the active agent for a project
+- `POST /v2/agents/connect` - Start or resume the active ACP agent session
+- `POST /v2/agents/disconnect` - Disconnect the active ACP agent session
+- `POST /v2/dispatch` - Send pending annotations to the active agent
+- `POST /v2/dispatch/cancel` - Cancel the current agent turn
 
 ### MCP Transports
 
@@ -144,7 +167,7 @@ Continue watching until I say stop or timeout is reached.
 
 ## Webhooks
 
-Configure webhooks to receive notifications when users request agent action:
+Webhooks are now a compatibility path. Prefer the built-in local ACP agent bridge first; only use webhook forwarding when you need to notify external automation:
 
 ```bash
 # Single webhook
@@ -166,16 +189,13 @@ export AGENTATION_WEBHOOKS=https://server1.com/hook,https://server2.com/hook
 ## Programmatic Usage
 
 ```typescript
-import { startHttpServer, startMcpHttpServer, startMcpServer } from "agentation-vue-mcp"
+import { startHttpServer, startMcpServer } from "agentation-vue-mcp"
 
-// Start browser sync API on port 4747
-startHttpServer(4747)
+// Start the unified local companion on port 4748
+startHttpServer(4748)
 
-// Start MCP HTTP transports on port 4748
-startMcpHttpServer(4748, "http://localhost:4747")
-
-// Start MCP stdio transport
-await startMcpServer("http://localhost:4747")
+// Start MCP stdio transport against the same API base URL
+await startMcpServer("http://localhost:4748")
 ```
 
 ## Storage

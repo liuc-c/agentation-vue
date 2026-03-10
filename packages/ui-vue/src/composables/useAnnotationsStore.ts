@@ -84,6 +84,7 @@ export function createAnnotationsStore(bridge: RuntimeBridge): AnnotationsStore 
     state.annotations.push(annotation)
     persist()
     bridge.sync?.enqueueUpsert(annotation)
+    bridge.agent?.enqueueAutoDispatch("annotation.upsert", annotation.sessionId)
     return annotation
   }
 
@@ -107,6 +108,7 @@ export function createAnnotationsStore(bridge: RuntimeBridge): AnnotationsStore 
     state.annotations.splice(idx, 1, updated)
     persist()
     bridge.sync?.enqueueUpdate(updated)
+    bridge.agent?.enqueueAutoDispatch("annotation.upsert", updated.sessionId)
   }
 
   function clearAll(): void {

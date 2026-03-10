@@ -23,7 +23,7 @@ onUnmounted(() => {
       <h1>Phase 4 — MVP Demo</h1>
       <p class="subtitle">
         Click any element to annotate it. Hover to see the highlight.
-        Use the toolbar (bottom-right) to export or toggle annotation mode.
+        Use the toolbar (bottom-right) to export, open settings, or toggle annotation mode.
       </p>
     </header>
 

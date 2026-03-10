@@ -49,10 +49,10 @@ export interface SettingsState {
   blockInteractions: boolean
   /** Current UI locale. */
   locale: Locale
-  /** Webhook endpoint URL. */
-  webhookUrl: string
-  /** Whether webhooks auto-send is enabled. */
-  webhooksEnabled: boolean
+  /** Whether auto-dispatch to the active agent is enabled. */
+  agentAutoSendEnabled: boolean
+  /** Locally preferred agent selection for the current project. */
+  selectedAgentId: string
 
   /** Toggle between dark and light mode. */
   toggleDarkMode(): void
@@ -71,8 +71,8 @@ interface PersistedSettings {
   autoClearAfterCopy?: boolean
   blockInteractions?: boolean
   locale?: Locale
-  webhookUrl?: string
-  webhooksEnabled?: boolean
+  agentAutoSendEnabled?: boolean
+  selectedAgentId?: string
 }
 
 /**
@@ -97,8 +97,8 @@ export function createSettingsState(defaults?: Partial<PersistedSettings>): Sett
     autoClearAfterCopy: persisted.autoClearAfterCopy ?? defaults?.autoClearAfterCopy ?? false,
     blockInteractions: persisted.blockInteractions ?? defaults?.blockInteractions ?? true,
     locale: normalizeLocale(persisted.locale) ?? normalizeLocale(defaults?.locale) ?? DEFAULT_LOCALE,
-    webhookUrl: persisted.webhookUrl ?? defaults?.webhookUrl ?? "",
-    webhooksEnabled: persisted.webhooksEnabled ?? defaults?.webhooksEnabled ?? false,
+    agentAutoSendEnabled: persisted.agentAutoSendEnabled ?? defaults?.agentAutoSendEnabled ?? false,
+    selectedAgentId: persisted.selectedAgentId ?? defaults?.selectedAgentId ?? "",
   })
 
   // Persist on every change
@@ -116,8 +116,8 @@ export function createSettingsState(defaults?: Partial<PersistedSettings>): Sett
       autoClearAfterCopy: state.autoClearAfterCopy,
       blockInteractions: state.blockInteractions,
       locale: state.locale,
-      webhookUrl: state.webhookUrl,
-      webhooksEnabled: state.webhooksEnabled,
+      agentAutoSendEnabled: state.agentAutoSendEnabled,
+      selectedAgentId: state.selectedAgentId,
     }),
     (settings) => saveSettings(settings),
     { deep: true },
@@ -148,10 +148,10 @@ export function createSettingsState(defaults?: Partial<PersistedSettings>): Sett
     set blockInteractions(v: boolean) { state.blockInteractions = v },
     get locale() { return state.locale },
     set locale(v: Locale) { state.locale = normalizeLocale(v) ?? DEFAULT_LOCALE },
-    get webhookUrl() { return state.webhookUrl },
-    set webhookUrl(v: string) { state.webhookUrl = v },
-    get webhooksEnabled() { return state.webhooksEnabled },
-    set webhooksEnabled(v: boolean) { state.webhooksEnabled = v },
+    get agentAutoSendEnabled() { return state.agentAutoSendEnabled },
+    set agentAutoSendEnabled(v: boolean) { state.agentAutoSendEnabled = v },
+    get selectedAgentId() { return state.selectedAgentId },
+    set selectedAgentId(v: string) { state.selectedAgentId = v },
 
     toggleDarkMode() {
       state.darkMode = !state.darkMode

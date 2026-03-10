@@ -8,6 +8,7 @@ import { useToolbarDrag } from "../composables/useToolbarDrag.js"
 import { SUPPORTED_LOCALES, LOCALE_LABELS } from "../i18n/index.js"
 import { injectStrict } from "../utils.js"
 import type { ExportActions } from "../composables/useExport.js"
+import type { AgentDispatchState, AgentSummary } from "../types.js"
 import {
   IconChevronLeft,
   IconChevronRight,
@@ -28,6 +29,7 @@ import {
   IconTrashAlt,
   IconXmarkLarge,
 } from "./icons.js"
+import AgentProviderIcon from "./AgentProviderIcon.vue"
 import AgTooltip from "./AgTooltip.vue"
 
 const OUTPUT_DETAIL_KEYS = ["compact", "standard", "detailed", "forensic"] as const
@@ -87,12 +89,79 @@ const settingsPanelPlacement = computed(
 )
 const mcpConnected = computed(() => !!bridge.sync)
 const syncInfo = computed(() => bridge.sync?.info)
+const companionEndpoint = computed(() => syncInfo.value?.endpoint ?? "http://localhost:4748")
 const mcpHttpEndpoint = computed(() => syncInfo.value?.mcpHttpUrl ?? "http://localhost:4748/mcp")
-const mcpSseEndpoint = computed(() => syncInfo.value?.mcpSseUrl ?? "http://localhost:4748/sse")
+const agentSummaries = ref<AgentSummary[]>([])
+const agentDispatchState = ref<AgentDispatchState | null>(null)
+const agentActionPending = ref<"select" | "connect" | "disconnect" | "dispatch" | "cancel" | null>(null)
+const agentBridgeAvailable = computed(() => Boolean(bridge.agent))
+const activeAgent = computed(() => agentSummaries.value.find((agent) => agent.isActive) ?? null)
+const sortedAgentSummaries = computed(() =>
+  [...agentSummaries.value].sort((left, right) => {
+    if (left.isActive !== right.isActive) return left.isActive ? -1 : 1
+    if (left.available !== right.available) return left.available ? -1 : 1
+    if (left.isDefault !== right.isDefault) return left.isDefault ? -1 : 1
+    return left.label.localeCompare(right.label)
+  }))
+const hasAvailableAgent = computed(() => agentSummaries.value.some((agent) => agent.available))
+const dispatchInFlight = computed(() => agentDispatchState.value?.state === "sending")
+const latestAgentActivity = computed(() => agentDispatchState.value?.message ?? activeAgent.value?.lastError ?? "")
 const connectionCards = computed(() => [
-  { key: "mcp-http", label: messages.value.settings.mcpHttpEndpointLabel, value: mcpHttpEndpoint.value },
-  { key: "mcp-sse", label: messages.value.settings.mcpSseEndpointLabel, value: mcpSseEndpoint.value },
+  { key: "companion", label: messages.value.settings.companionEndpointLabel, value: companionEndpoint.value },
+  { key: "mcp-http", label: messages.value.settings.mcpEndpointLabel, value: mcpHttpEndpoint.value },
 ])
+const activeAgentConnected = computed(() => {
+  const status = activeAgent.value?.status
+  return status === "ready" || status === "busy" || status === "error"
+})
+const primaryAgentTitle = computed(() => activeAgent.value?.label ?? messages.value.settings.noAgentSelected)
+const primaryAgentStatus = computed(() =>
+  activeAgent.value ? getAgentStatusLabel(activeAgent.value.status) : messages.value.settings.mcpStatusDisconnected)
+const primaryAgentGuidance = computed(() => {
+  if (!activeAgent.value) {
+    return messages.value.settings.selectAgentToStart
+  }
+
+  if (!activeAgent.value.available) {
+    return activeAgent.value.installHint ?? messages.value.settings.installAgentHint
+  }
+
+  if (!activeAgentConnected.value) {
+    return messages.value.settings.connectAgentToStart
+  }
+
+  return messages.value.settings.sendPendingToStart
+})
+const primaryAgentActionLabel = computed(() => {
+  if (!activeAgent.value) {
+    return messages.value.settings.noAgentSelected
+  }
+
+  if (!activeAgent.value.available) {
+    return activeAgent.value.homepage ? messages.value.settings.openHomepage : messages.value.settings.installAgent
+  }
+
+  if (!activeAgentConnected.value) {
+    return messages.value.settings.connectAgent
+  }
+
+  return messages.value.settings.manualSend
+})
+const primaryAgentActionDisabled = computed(() => {
+  if (!agentBridgeAvailable.value || agentActionPending.value !== null) {
+    return true
+  }
+
+  if (!activeAgent.value) {
+    return true
+  }
+
+  if (!activeAgent.value.available) {
+    return !activeAgent.value.homepage
+  }
+
+  return false
+})
 
 // Sync toolbar expanded state → annotation mode.
 // Collapsing disables selection; expanding re-enables it.
@@ -111,6 +180,7 @@ watch(expanded, async (isExpanded) => {
 
 let entranceTimer: ReturnType<typeof setTimeout> | null = null
 let guideCopyTimer: ReturnType<typeof setTimeout> | null = null
+let unsubscribeAgent: (() => void) | null = null
 
 onMounted(() => {
   document.addEventListener("pointerdown", onOutsideClick, true)
@@ -125,6 +195,7 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener("pointerdown", onOutsideClick, true)
   window.removeEventListener("resize", syncSettingsPanelHeight)
+  unsubscribeAgent?.()
   if (entranceTimer) window.clearTimeout(entranceTimer)
   if (guideCopyTimer) window.clearTimeout(guideCopyTimer)
 })
@@ -194,6 +265,7 @@ function toggleSettingsPanel(): void {
 function openAutomationsPanel(): void {
   settingsOpen.value = true
   settingsPage.value = "automations"
+  void refreshAgents()
 }
 
 function openCopySettingsPanel(): void {
@@ -205,6 +277,143 @@ function showMainSettings(): void {
   settingsPage.value = "main"
 }
 
+function openAgentHomepage(agent?: AgentSummary | null): void {
+  if (!agent?.homepage || typeof window === "undefined") return
+  window.open(agent.homepage, "_blank", "noopener,noreferrer")
+}
+
+function getAgentStatusLabel(status: AgentSummary["status"]): string {
+  switch (status) {
+    case "ready":
+      return messages.value.settings.agentStatusReady
+    case "available":
+      return messages.value.settings.agentStatusAvailable
+    case "missing":
+      return messages.value.settings.agentStatusMissing
+    case "connecting":
+      return messages.value.settings.agentStatusConnecting
+    case "busy":
+      return messages.value.settings.agentStatusBusy
+    case "error":
+      return messages.value.settings.agentStatusError
+  }
+}
+
+function applyAgentState(state: { agents?: AgentSummary[]; dispatch?: AgentDispatchState | null }): void {
+  if (state.agents) {
+    agentSummaries.value = state.agents
+    const selected = state.agents.find((agent) => agent.isActive)
+    if (selected) {
+      settings.selectedAgentId = selected.id
+    }
+  }
+
+  if ("dispatch" in state) {
+    agentDispatchState.value = state.dispatch ?? null
+  }
+}
+
+function upsertAgentSummary(summary: AgentSummary): void {
+  const idx = agentSummaries.value.findIndex((agent) => agent.id === summary.id)
+  if (idx >= 0) {
+    agentSummaries.value.splice(idx, 1, summary)
+  } else {
+    agentSummaries.value = [...agentSummaries.value, summary]
+  }
+}
+
+async function refreshAgents(): Promise<void> {
+  if (!bridge.agent) return
+
+  try {
+    applyAgentState(await bridge.agent.listAgents())
+  } catch (error) {
+    bridge.notify?.({
+      kind: "warning",
+      duration: 2800,
+      message: error instanceof Error ? error.message : "Failed to refresh agents",
+    })
+  }
+}
+
+async function runAgentAction(
+  action: NonNullable<typeof agentActionPending.value>,
+  fn: () => Promise<void>,
+): Promise<void> {
+  if (!bridge.agent) return
+  agentActionPending.value = action
+
+  try {
+    await fn()
+  } catch (error) {
+    bridge.notify?.({
+      kind: "warning",
+      duration: 2800,
+      message: error instanceof Error ? error.message : "Agent action failed",
+    })
+  } finally {
+    agentActionPending.value = null
+  }
+}
+
+async function selectAgent(agentId: string): Promise<void> {
+  if (!bridge.agent) return
+  await runAgentAction("select", async () => {
+    settings.selectedAgentId = agentId
+    applyAgentState(await bridge.agent!.selectAgent(agentId))
+  })
+}
+
+async function connectAgent(agentId?: string): Promise<void> {
+  if (!bridge.agent) return
+  await runAgentAction("connect", async () => {
+    applyAgentState(await bridge.agent!.connect(agentId))
+  })
+}
+
+async function disconnectAgent(agentId?: string): Promise<void> {
+  if (!bridge.agent) return
+  await runAgentAction("disconnect", async () => {
+    applyAgentState(await bridge.agent!.disconnect(agentId))
+  })
+}
+
+async function sendToAgent(): Promise<void> {
+  if (!bridge.agent) return
+  await runAgentAction("dispatch", async () => {
+    applyAgentState(await bridge.agent!.dispatch("manual", "manual.send"))
+  })
+}
+
+async function cancelAgentDispatch(): Promise<void> {
+  if (!bridge.agent) return
+  await runAgentAction("cancel", async () => {
+    applyAgentState(await bridge.agent!.cancelDispatch())
+  })
+}
+
+async function runPrimaryAgentAction(): Promise<void> {
+  if (!activeAgent.value) return
+
+  if (!activeAgent.value.available) {
+    openAgentHomepage(activeAgent.value)
+    return
+  }
+
+  if (!activeAgentConnected.value) {
+    await connectAgent(activeAgent.value.id)
+    return
+  }
+
+  await sendToAgent()
+}
+
+function getAgentAvailabilityLabel(agent: AgentSummary): string {
+  return agent.available
+    ? messages.value.settings.availableOnMachine
+    : messages.value.settings.notInstalledOnMachine
+}
+
 function toggleCopyExcludedField(field: typeof COPY_EXCLUDE_FIELDS[number]): void {
   settings.copyExcludeFields = settings.copyExcludeFields.includes(field)
     ? settings.copyExcludeFields.filter((item) => item !== field)
@@ -212,7 +421,16 @@ function toggleCopyExcludedField(field: typeof COPY_EXCLUDE_FIELDS[number]): voi
 }
 
 watch(
-  [panelOpen, settingsPage, messages, mcpHttpEndpoint, mcpSseEndpoint, () => settings.copyExcludeFields.length],
+  [
+    panelOpen,
+    settingsPage,
+    messages,
+    mcpHttpEndpoint,
+    () => settings.copyExcludeFields.length,
+    () => agentSummaries.value.length,
+    () => agentDispatchState.value?.state,
+    latestAgentActivity,
+  ],
   async ([isOpen]) => {
     if (!isOpen) {
       settingsPagesHeight.value = null
@@ -223,6 +441,22 @@ watch(
   },
   { flush: "post" },
 )
+
+onMounted(() => {
+  unsubscribeAgent = bridge.agent?.subscribe((event) => {
+    if (event.agents) {
+      agentSummaries.value = event.agents
+    }
+    if (event.agent) {
+      upsertAgentSummary(event.agent)
+    }
+    if (event.dispatch) {
+      agentDispatchState.value = event.dispatch
+    }
+  }) ?? null
+
+  void refreshAgents()
+})
 
 function clearAll(): void {
   store.clearAll()
@@ -528,7 +762,7 @@ function getMaxSettingsPanelHeight(): number {
                 <button class="nav-btn" :class="{ light: isLight }" type="button" @click="openAutomationsPanel">
                   <span class="nav-btn-left">
                     <IconConnectedNodes :size="18" />
-                    <span>{{ messages.settings.manageMcpWebhooks }}</span>
+                    <span>{{ messages.settings.manageAgents }}</span>
                   </span>
                   <span class="nav-btn-right">
                     <span class="nav-status-indicator"
@@ -597,48 +831,149 @@ function getMaxSettingsPanelHeight(): number {
               <div class="settings-header automations-header" :class="{ light: isLight }">
                 <button class="back-btn" :class="{ light: isLight }" type="button" @click="showMainSettings">
                   <IconChevronLeft :size="16" />
-                  <span>{{ messages.settings.manageMcpWebhooks }}</span>
+                  <span>{{ messages.settings.manageAgents }}</span>
                 </button>
               </div>
 
               <div class="settings-section">
                 <div class="settings-row">
-                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.mcpConnection }}</span>
+                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.companionStatus }}</span>
                   <span class="mcp-status" :class="{ light: isLight }">
                     <span class="status-dot" :class="mcpConnected ? 'connected' : 'disconnected'" />
                     {{ mcpConnected ? messages.settings.mcpStatusConnected : messages.settings.mcpStatusDisconnected }}
                   </span>
                 </div>
+                <p class="settings-description" :class="{ light: isLight }">
+                  {{ messages.settings.agentWorkspaceDescription }}
+                </p>
               </div>
 
               <div class="settings-section">
                 <div class="settings-row">
-                  <span class="settings-label-with-help">
-                    <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.webhooks }}</span>
-                    <AgTooltip :content="messages.settings.webhooksDescription">
-                      <IconHelp :size="HELP_ICON_SIZE"
-                        :style="{ color: isLight ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.3)', cursor: 'help' }" />
-                    </AgTooltip>
+                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.currentAgent }}</span>
+                  <span class="agent-inline-status" :class="{ light: isLight }">
+                    {{ primaryAgentStatus }}
+                  </span>
+                </div>
+
+                <div class="agent-summary-panel" :class="{ light: isLight }">
+                  <div class="agent-summary-row">
+                    <strong class="agent-summary-title">{{ primaryAgentTitle }}</strong>
+                    <span class="agent-pill" :class="[activeAgent?.status ?? 'missing', { light: isLight }]">
+                      {{ primaryAgentStatus }}
+                    </span>
+                  </div>
+
+                  <p class="settings-description" :class="{ light: isLight }">
+                    {{ primaryAgentGuidance }}
+                  </p>
+
+                  <div class="agent-primary-actions">
+                    <button class="agent-primary-btn" :class="{ light: isLight }" type="button"
+                      :disabled="primaryAgentActionDisabled" @click="void runPrimaryAgentAction()">
+                      {{ primaryAgentActionLabel }}
+                    </button>
+                    <button v-if="dispatchInFlight" class="mini-btn secondary-action" :class="{ light: isLight }"
+                      type="button" :disabled="agentActionPending !== null || !agentBridgeAvailable"
+                      @click="void cancelAgentDispatch()">
+                      {{ messages.settings.cancelSend }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-section">
+                <div class="settings-row">
+                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentsConnection }}</span>
+                  <span class="agent-inline-status" :class="{ light: isLight }">
+                    {{ hasAvailableAgent ? messages.settings.availableOnMachine : messages.settings.notInstalledOnMachine }}
                   </span>
                 </div>
 
                 <label class="toggle-row webhook-toggle">
-                  <input class="sr-only" type="checkbox" :checked="settings.webhooksEnabled"
-                    @change="settings.webhooksEnabled = ($event.target as HTMLInputElement).checked">
-                  <span class="checkbox" :class="{ checked: settings.webhooksEnabled, light: isLight }">
-                    <IconCheckSmallAnimated v-if="settings.webhooksEnabled" :size="14" />
+                  <input class="sr-only" type="checkbox" :checked="settings.agentAutoSendEnabled"
+                    @change="settings.agentAutoSendEnabled = ($event.target as HTMLInputElement).checked">
+                  <span class="checkbox" :class="{ checked: settings.agentAutoSendEnabled, light: isLight }">
+                    <IconCheckSmallAnimated v-if="settings.agentAutoSendEnabled" :size="14" />
                   </span>
-                  <span class="toggle-label" :class="{ light: isLight }">{{ messages.settings.webhooksAutoSend }}</span>
+                  <span class="toggle-label" :class="{ light: isLight }">{{ messages.settings.autoSendToAgent }}</span>
                 </label>
 
                 <p class="settings-description" :class="{ light: isLight }">
-                  {{ messages.settings.webhooksDescription }}
+                  {{ messages.settings.autoSendDescription }}
                 </p>
+              </div>
 
-                <textarea class="webhook-url" :class="{ light: isLight }" :value="settings.webhookUrl"
-                  :placeholder="messages.settings.webhooksUrlPlaceholder"
-                  :style="{ borderColor: settings.annotationColor }" rows="2" spellcheck="false"
-                  @input="settings.webhookUrl = ($event.target as HTMLTextAreaElement).value" />
+              <div class="settings-section">
+                <div class="settings-row">
+                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentSelection }}</span>
+                </div>
+
+                <div v-if="agentBridgeAvailable && sortedAgentSummaries.length > 0" class="agent-list">
+                  <div v-for="agent in sortedAgentSummaries" :key="agent.id" class="agent-card"
+                    :class="{ light: isLight, active: agent.isActive }">
+                    <div class="agent-card-main">
+                      <div class="agent-card-leading">
+                        <AgentProviderIcon :icon="agent.icon" :label="agent.label" :light="isLight" />
+                        <div class="agent-card-copy">
+                          <div class="agent-card-title-row">
+                            <span class="guide-card-title">{{ agent.label }}</span>
+                            <span class="agent-pill" :class="[agent.status, { light: isLight }]">
+                              {{ getAgentStatusLabel(agent.status) }}
+                            </span>
+                          </div>
+                          <div class="agent-card-meta" :class="{ light: isLight }">
+                            <span>{{ getAgentAvailabilityLabel(agent) }}</span>
+                            <span v-if="agent.isActive">{{ messages.settings.activeAgent }}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <p v-if="agent.description" class="settings-description" :class="{ light: isLight }">
+                        {{ agent.description }}
+                      </p>
+                      <p v-else-if="!agent.available && agent.installHint" class="settings-description"
+                        :class="{ light: isLight }">
+                        {{ agent.installHint }}
+                      </p>
+                      <p v-else-if="agent.lastError" class="settings-description" :class="{ light: isLight }">
+                        {{ agent.lastError }}
+                      </p>
+                    </div>
+
+                    <div class="agent-card-actions">
+                      <button class="mini-btn" :class="{ light: isLight, active: agent.isActive }" type="button"
+                        :disabled="!agent.available || agentActionPending !== null" @click="void selectAgent(agent.id)">
+                        {{ agent.isActive ? messages.settings.activeAgent : messages.settings.useAgent }}
+                      </button>
+                      <button v-if="agent.homepage" class="mini-btn" :class="{ light: isLight }" type="button"
+                        :disabled="agentActionPending !== null" @click="openAgentHomepage(agent)">
+                        {{ messages.settings.openHomepage }}
+                      </button>
+                      <button v-if="agent.isActive && (agent.status === 'ready' || agent.status === 'busy' || agent.status === 'error')"
+                        class="mini-btn" :class="{ light: isLight }" type="button"
+                        :disabled="agentActionPending !== null" @click="void disconnectAgent(agent.id)">
+                        {{ messages.settings.disconnectAgent }}
+                      </button>
+                      <button v-else class="mini-btn" :class="{ light: isLight }" type="button"
+                        :disabled="!agent.available || agentActionPending !== null" @click="void connectAgent(agent.id)">
+                        {{ messages.settings.connectAgent }}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <p v-else class="settings-description" :class="{ light: isLight }">
+                  {{ messages.settings.noAgentsAvailable }}
+                </p>
+              </div>
+
+              <div class="settings-section" v-if="latestAgentActivity">
+                <div class="settings-row">
+                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentLastActivity }}</span>
+                </div>
+                <p class="settings-description" :class="{ light: isLight }">
+                  {{ latestAgentActivity }}
+                </p>
               </div>
 
               <div class="settings-section">
@@ -1578,7 +1913,43 @@ function getMaxSettingsPanelHeight(): number {
   max-height: min(72vh, 520px);
   overflow-y: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
   padding: 13px 16px 16px;
+}
+
+.settings-page::-webkit-scrollbar {
+  width: 8px;
+}
+
+.settings-page::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settings-page::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.settings-page::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+  border-color: transparent;
+}
+
+.settings-panel.light .settings-page {
+  scrollbar-color: rgba(15, 23, 42, 0.16) transparent;
+}
+
+.settings-panel.light .settings-page::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.16);
+  border-color: transparent;
+}
+
+.settings-panel.light .settings-page::-webkit-scrollbar-thumb:hover {
+  background: rgba(15, 23, 42, 0.22);
 }
 
 /* --- Label with help icon -------------------------------------------- */
@@ -1725,6 +2096,251 @@ function getMaxSettingsPanelHeight(): number {
 
 .settings-description.light {
   color: rgba(0, 0, 0, 0.4);
+}
+
+.agent-summary-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.agent-summary-panel.light {
+  border-color: rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.agent-summary-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-summary-title {
+  font-size: 15px;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.agent-primary-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-primary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: #f5f5f5;
+  color: #111827;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.agent-primary-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+}
+
+.agent-primary-btn.light {
+  border-color: rgba(15, 23, 42, 0.14);
+  background: #111827;
+  color: #f8fafc;
+}
+
+.agent-primary-btn:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.secondary-action {
+  width: 100%;
+}
+
+.agent-inline-status {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.agent-inline-status.light {
+  color: rgba(0, 0, 0, 0.48);
+}
+
+.agent-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.agent-card {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.agent-card.light {
+  border-color: rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.agent-card.active {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.agent-card.active.light {
+  border-color: rgba(15, 23, 42, 0.14);
+  background: rgba(15, 23, 42, 0.035);
+}
+
+.agent-card-main {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-card-leading {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.agent-card-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.agent-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.46);
+}
+
+.agent-card-meta.light {
+  color: rgba(0, 0, 0, 0.42);
+}
+
+.agent-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-pill,
+.mini-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.agent-pill {
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.agent-pill.light {
+  background: rgba(0, 0, 0, 0.04);
+  color: rgba(0, 0, 0, 0.72);
+}
+
+.agent-pill.available,
+.agent-pill.ready {
+  border-color: rgba(34, 197, 94, 0.24);
+  color: #22c55e;
+}
+
+.agent-pill.connecting,
+.agent-pill.busy {
+  border-color: rgba(245, 158, 11, 0.24);
+  color: #f59e0b;
+}
+
+.agent-pill.missing,
+.agent-pill.error {
+  border-color: rgba(239, 68, 68, 0.24);
+  color: #ef4444;
+}
+
+.mini-btn {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.86);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.mini-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.mini-btn.light {
+  border-color: rgba(0, 0, 0, 0.12);
+  background: rgba(0, 0, 0, 0.03);
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.mini-btn.light:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.mini-btn.active {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mini-btn.active.light {
+  border-color: rgba(15, 23, 42, 0.14);
+  background: rgba(15, 23, 42, 0.06);
+  color: rgba(15, 23, 42, 0.84);
+}
+
+.mini-btn:disabled,
+.nav-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.agent-actions {
+  display: grid;
+  gap: 8px;
 }
 
 /* --- Get started guide ----------------------------------------------- */

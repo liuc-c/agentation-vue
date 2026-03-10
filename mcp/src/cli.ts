@@ -2,7 +2,7 @@
  * Agentation MCP CLI
  *
  * Usage:
- *   agentation-vue-mcp server [--port 4747]
+ *   agentation-vue-mcp server [--port 4748]
  *   agentation-vue-mcp init
  *   agentation-vue-mcp doctor
  */
@@ -13,6 +13,79 @@ import * as path from "path";
 import { spawn } from "child_process";
 
 const command = process.argv[2];
+
+async function runAgentsInit() {
+  const { getAgentConfigPath, loadAgentCatalog, writeAgentCatalogConfig } = await import("./server/agent-config.js");
+  const { refreshRegistryCache } = await import("./server/registry/index.js");
+
+  await refreshRegistryCache();
+  const catalog = loadAgentCatalog();
+  writeAgentCatalogConfig(catalog);
+
+  console.log(`✓ Wrote agent catalog to ${getAgentConfigPath()}`);
+  if (catalog.registryUrl) {
+    console.log(`  Registry: ${catalog.registryUrl}`);
+  }
+  for (const agent of catalog.agents) {
+    console.log(`  - ${agent.label}: ${agent.available ? "available" : "missing"} (${agent.resolvedCommand})`);
+  }
+}
+
+async function runAgentsList() {
+  const { loadAgentCatalog } = await import("./server/agent-config.js");
+  const { getAgentRegistryCachePath, refreshRegistryCache } = await import("./server/registry/index.js");
+
+  await refreshRegistryCache();
+  const catalog = loadAgentCatalog();
+
+  console.log(JSON.stringify({
+    configPath: catalog.configPath,
+    registryUrl: catalog.registryUrl,
+    registryCachePath: getAgentRegistryCachePath(),
+    source: catalog.source,
+    defaultAgentId: catalog.defaultAgentId,
+    agents: catalog.agents.map((agent) => ({
+      id: agent.id,
+      label: agent.label,
+      kind: agent.kind,
+      icon: agent.icon,
+      description: agent.description,
+      homepage: agent.homepage,
+      installHint: agent.installHint,
+      available: agent.available,
+      command: agent.resolvedCommand,
+      status: agent.status,
+    })),
+  }, null, 2));
+}
+
+async function runAgentsDoctor() {
+  const { getAgentConfigPath, loadAgentCatalog } = await import("./server/agent-config.js");
+  const { getAgentRegistryCachePath, refreshRegistryCache } = await import("./server/registry/index.js");
+  const registry = await refreshRegistryCache();
+  const catalog = loadAgentCatalog();
+
+  console.log(`
+╔═══════════════════════════════════════════════════════════════╗
+║                  Agentation Agent Doctor                      ║
+╚═══════════════════════════════════════════════════════════════╝
+`);
+  console.log(`Config path: ${getAgentConfigPath()}`);
+  console.log(`Registry cache: ${getAgentRegistryCachePath()}`);
+  console.log(`Registry source: ${registry.source}${registry.registryUrl ? ` (${registry.registryUrl})` : ""}`);
+  console.log(`Default agent: ${catalog.defaultAgentId ?? "(none)"}`);
+  console.log();
+
+  for (const agent of catalog.agents) {
+    const icon = agent.available ? "✓" : "○";
+    console.log(`${icon} ${agent.label} (${agent.kind})`);
+    console.log(`  command: ${agent.resolvedCommand}`);
+    console.log(`  status: ${agent.available ? "available" : "missing"}`);
+    if (agent.installHint) {
+      console.log(`  install: ${agent.installHint}`);
+    }
+  }
+}
 
 // ============================================================================
 // INIT COMMAND - Interactive setup wizard
@@ -54,14 +127,14 @@ async function runInit() {
   const wantsMcp = setupMcp.toLowerCase() !== "n";
 
   if (wantsMcp) {
-    let port = 4747;
-    const portAnswer = await question(`HTTP server port [4747]: `);
+    let port = 4748;
+    const portAnswer = await question(`Companion server port [4748]: `);
     if (portAnswer && !isNaN(parseInt(portAnswer, 10))) {
       port = parseInt(portAnswer, 10);
     }
 
     // Register MCP server using claude mcp add
-    const mcpArgs = port === 4747
+    const mcpArgs = port === 4748
       ? ["mcp", "add", "agentation", "--", "npx", "agentation-vue-mcp", "server"]
       : ["mcp", "add", "agentation", "--", "npx", "agentation-vue-mcp", "server", "--port", String(port)];
 
@@ -193,14 +266,14 @@ async function runDoctor() {
 
   // Check 4: Server connectivity (try default port)
   try {
-    const response = await fetch("http://localhost:4747/health", { signal: AbortSignal.timeout(2000) });
+    const response = await fetch("http://localhost:4748/health", { signal: AbortSignal.timeout(2000) });
     if (response.ok) {
-      results.push({ name: "Server (port 4747)", status: "pass", message: "Running and healthy" });
+      results.push({ name: "Server (port 4748)", status: "pass", message: "Running and healthy" });
     } else {
-      results.push({ name: "Server (port 4747)", status: "warn", message: `Responded with ${response.status}` });
+      results.push({ name: "Server (port 4748)", status: "warn", message: `Responded with ${response.status}` });
     }
   } catch {
-    results.push({ name: "Server (port 4747)", status: "warn", message: "Not running (start with: agentation-vue-mcp server)" });
+    results.push({ name: "Server (port 4748)", status: "warn", message: "Not running (start with: agentation-vue-mcp server)" });
   }
 
   // Print results
@@ -233,14 +306,31 @@ if (command === "init") {
     console.error("Doctor failed:", err);
     process.exit(1);
   });
+} else if (command === "agents") {
+  const subcommand = process.argv[3] || "list";
+
+  const runner = subcommand === "init"
+    ? runAgentsInit
+    : subcommand === "doctor"
+      ? runAgentsDoctor
+      : runAgentsList;
+
+  runner().catch((err) => {
+    console.error(`agents ${subcommand} failed:`, err);
+    process.exit(1);
+  });
 } else if (command === "server") {
   // Dynamic import to avoid loading server code for other commands
-  import("./server/index.js").then(({ startHttpServer, startMcpHttpServer, startMcpServer, setApiKey }) => {
+  Promise.all([
+    import("./server/index.js"),
+    import("./server/registry/index.js"),
+  ]).then(([serverModule, registryModule]) => {
+    const { startHttpServer, startMcpServer, setApiKey } = serverModule;
+    const { refreshRegistryCache } = registryModule;
     const args = process.argv.slice(3);
-    let port = 4747;
-    let mcpPort = 4748;
+    let port = 4748;
     let mcpOnly = false;
-    let httpUrl = "http://localhost:4747";
+    let httpUrl = "http://localhost:4748";
     let apiKeyArg: string | undefined;
     let noStdio = false;
 
@@ -252,13 +342,6 @@ if (command === "init") {
           if (!args.includes("--http-url")) {
             httpUrl = `http://localhost:${port}`;
           }
-        }
-        i++;
-      }
-      if (args[i] === "--mcp-port" && args[i + 1]) {
-        const parsed = parseInt(args[i + 1], 10);
-        if (!isNaN(parsed) && parsed > 0 && parsed < 65536) {
-          mcpPort = parsed;
         }
         i++;
       }
@@ -284,16 +367,20 @@ if (command === "init") {
       setApiKey(apiKey);
     }
 
-    if (!mcpOnly) {
-      startHttpServer(port, apiKey);
-    }
-    startMcpHttpServer(mcpPort, httpUrl);
-    if (!noStdio) {
+    refreshRegistryCache().catch(() => undefined).finally(() => {
+      if (!mcpOnly) {
+        startHttpServer(port, apiKey);
+      }
+
+      if (noStdio) {
+        return;
+      }
+
       startMcpServer(httpUrl).catch((err) => {
         console.error("MCP server error:", err);
         process.exit(1);
       });
-    }
+    });
   });
 } else if (command === "help" || command === "--help" || command === "-h" || !command) {
   console.log(`
@@ -301,24 +388,29 @@ agentation-vue-mcp - MCP server for Agentation visual feedback
 
 Usage:
   agentation-vue-mcp init                    Interactive setup wizard
+  agentation-vue-mcp agents [list|init|doctor]
   agentation-vue-mcp server [options]        Start the annotation server
   agentation-vue-mcp doctor                  Check your setup and diagnose issues
   agentation-vue-mcp help                    Show this help message
 
 Server Options:
-  --port <port>      Browser sync API port (default: 4747)
-  --mcp-port <port>  MCP transport port for /mcp and /sse (default: 4748)
-  --mcp-only         Skip browser API server and only expose MCP transports
-  --http-url <url>   Browser API base URL for MCP tools to fetch from
+  --port <port>      Unified companion port for API + /mcp + /sse (default: 4748)
+  --mcp-only         Skip the local HTTP companion and only expose stdio MCP
+  --http-url <url>   Agentation API base URL for MCP tools to fetch from
   --api-key <key>    API key for cloud storage (or set AGENTATION_API_KEY env var)
-  --no-stdio         Disable stdio MCP transport and only expose network transports
+  --no-stdio         Disable stdio MCP transport
 
 Commands:
   init      Guided setup that configures Claude Code to use the MCP server.
             Registers the server via 'claude mcp add'.
 
-  server    Starts the V2 browser API plus MCP transports.
-            Browser/plugin sync uses the API port.
+  agents    Manage the local ACP/CLI bridge catalog:
+            - list   Print detected/configured agents as JSON
+            - init   Write ~/.agentation/agents.json from the registry-backed catalog
+            - doctor Show current local agent availability
+
+  server    Starts the unified Agentation companion on one port.
+            Browser/plugin sync uses /v2/* on that port.
             MCP clients can connect over streamable HTTP (/mcp), SSE (/sse),
             or stdio unless --no-stdio is passed.
 
@@ -329,9 +421,11 @@ Commands:
 
 Examples:
   agentation-vue-mcp init                Set up Agentation MCP
-  agentation-vue-mcp server                                 Start API on 4747 and MCP on 4748
-  agentation-vue-mcp server --port 8080 --mcp-port 8081    Override both ports
-  agentation-vue-mcp server --no-stdio                      Network-only MCP transport
+  agentation-vue-mcp agents init         Write a starter ACP agent catalog
+  agentation-vue-mcp agents doctor       Inspect local agent availability
+  agentation-vue-mcp server                                 Start unified companion on 4748
+  agentation-vue-mcp server --port 8080                    Override the companion port
+  agentation-vue-mcp server --no-stdio                     HTTP-only MCP transport
   agentation-vue-mcp doctor              Check if everything is configured correctly
 
   # Use cloud storage with API key (local server proxies to cloud)

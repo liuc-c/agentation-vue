@@ -43,8 +43,8 @@ function makeProvides(annotations: any[] = []) {
     autoClearAfterCopy: false,
     blockInteractions: true,
     locale: "en",
-    webhookUrl: "",
-    webhooksEnabled: false,
+    agentAutoSendEnabled: false,
+    selectedAgentId: "",
     toggleDarkMode: vi.fn(),
   }
 

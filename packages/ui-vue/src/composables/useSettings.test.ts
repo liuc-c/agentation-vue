@@ -20,6 +20,8 @@ describe("createSettingsState", () => {
     expect(state.autoClearAfterCopy).toBe(false)
     expect(state.blockInteractions).toBe(true)
     expect(state.locale).toBe("en")
+    expect(state.agentAutoSendEnabled).toBe(false)
+    expect(state.selectedAgentId).toBe("")
   })
 
   it("accepts custom defaults", () => {
@@ -31,6 +33,8 @@ describe("createSettingsState", () => {
       copyExcludeFields: ["projectArea", "framework"],
       blockInteractions: false,
       locale: "zh-CN",
+      agentAutoSendEnabled: true,
+      selectedAgentId: "claude",
     })
     expect(state.outputDetail).toBe("forensic")
     expect(state.darkMode).toBe(false)
@@ -39,6 +43,8 @@ describe("createSettingsState", () => {
     expect(state.copyExcludeFields).toEqual(["projectArea", "framework"])
     expect(state.blockInteractions).toBe(false)
     expect(state.locale).toBe("zh-CN")
+    expect(state.agentAutoSendEnabled).toBe(true)
+    expect(state.selectedAgentId).toBe("claude")
   })
 
   it("toggles dark mode", () => {
@@ -66,6 +72,8 @@ describe("createSettingsState", () => {
         copyPrefix: "Hi",
         copyExcludeFields: ["projectArea"],
         locale: "zh-CN",
+        agentAutoSendEnabled: true,
+        selectedAgentId: "codex",
       }),
     )
     const state = createSettingsState()
@@ -75,6 +83,8 @@ describe("createSettingsState", () => {
     expect(state.copyPrefix).toBe("Hi")
     expect(state.copyExcludeFields).toEqual(["projectArea"])
     expect(state.locale).toBe("zh-CN")
+    expect(state.agentAutoSendEnabled).toBe(true)
+    expect(state.selectedAgentId).toBe("codex")
   })
 
   it("localStorage overrides defaults", () => {

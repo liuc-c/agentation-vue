@@ -25,11 +25,12 @@ export async function createSession(
   endpoint: string,
   url: string,
   projectId?: string,
+  metadata?: Record<string, unknown>,
 ): Promise<Session> {
   const response = await fetch(`${resolveV2Base(endpoint)}/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, projectId }),
+    body: JSON.stringify({ url, projectId, metadata }),
   })
   if (!response.ok) {
     throw new Error(`Failed to create session: ${response.status}`)
@@ -51,7 +52,7 @@ export async function getSession(
 export async function updateSession(
   endpoint: string,
   sessionId: string,
-  data: { projectId: string },
+  data: { projectId?: string; metadata?: Record<string, unknown> },
 ): Promise<Session> {
   const response = await fetch(`${resolveV2Base(endpoint)}/sessions/${sessionId}`, {
     method: "PATCH",

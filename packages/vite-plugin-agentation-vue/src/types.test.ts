@@ -12,6 +12,10 @@ describe("resolveOptions", () => {
     const resolved = resolveOptions({}, "serve")
     expect(resolved.enabled).toBe(true)
     expect(resolved.sync).toMatchObject(DEFAULT_AGENTATION_SYNC_OPTIONS)
+    expect(resolved.agent).toEqual({
+      enabled: true,
+      autoSend: false,
+    })
     expect(resolveMcpEndpoint(resolved.sync as Exclude<typeof resolved.sync, false>)).toBe("http://localhost:4748")
   })
 
@@ -28,13 +32,14 @@ describe("resolveOptions", () => {
       debounceMs: 400,
       ensureServer: true,
     })
-    expect(resolveMcpEndpoint(resolved.sync as Exclude<typeof resolved.sync, false>)).toBe("http://localhost:5001")
+    expect(resolveMcpEndpoint(resolved.sync as Exclude<typeof resolved.sync, false>)).toBe("http://localhost:5000")
   })
 
   it("infers projectId from the Vite root directory", () => {
     const resolved = resolveOptions({}, "serve", `/tmp/${inferredProjectId}`)
 
     expect(resolved.projectId).toBe(inferredProjectId)
+    expect(resolved.projectRoot).toBe(`/tmp/${inferredProjectId}`)
     expect(resolved.sync).toMatchObject({
       projectId: inferredProjectId,
     })
@@ -68,5 +73,19 @@ describe("resolveOptions", () => {
     }, "serve")
 
     expect(resolved.sync).toBe(false)
+  })
+
+  it("allows configuring the agent bridge defaults", () => {
+    const resolved = resolveOptions({
+      agent: {
+        enabled: true,
+        autoSend: true,
+      },
+    }, "serve")
+
+    expect(resolved.agent).toEqual({
+      enabled: true,
+      autoSend: true,
+    })
   })
 })

@@ -7,6 +7,11 @@
 
 // Re-export server functions
 export { startHttpServer, startMcpHttpServer, startMcpServer } from "./server/index.js";
+export { AgentManager } from "./server/agent-manager.js";
+export { loadAgentCatalog, getAgentConfigPath, writeAgentCatalogConfig } from "./server/agent-config.js";
+export { refreshRegistryCache, getAgentRegistryCachePath } from "./server/registry/index.js";
+export type { AgentKind, AgentStatus, LocalAgentConfig, ResolvedAgentConfig } from "./server/agent-config.js";
+export type { AgentRegistryManifest, RegistryAgentDefinition } from "./server/registry/types.js";
 
 // Re-export store functions
 export {

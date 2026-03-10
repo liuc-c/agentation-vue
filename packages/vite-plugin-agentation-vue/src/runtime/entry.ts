@@ -11,6 +11,7 @@ import type { RuntimeBridge, UiNotification } from "@liuovo/agentation-vue-ui"
 import type { ResolvedAgentationVueOptions } from "../types.ts"
 import { bindTracer } from "./resolver/index.ts"
 import { setupInfrastructure, attachListeners } from "./bootstrap.ts"
+import { createRuntimeAgentBridge } from "./agent.ts"
 import { createRuntimeSyncBridge } from "./sync.ts"
 
 // ---------------------------------------------------------------------------
@@ -82,7 +83,13 @@ export function runAgentationRuntime(options: ResolvedAgentationVueOptions): voi
     options: { outputDetail: options.outputDetail },
     storage: infra.storage,
     sync: options.sync
-      ? createRuntimeSyncBridge(options.sync, infra.storage)
+      ? createRuntimeSyncBridge(options.sync, infra.storage, options.projectRoot)
+      : undefined,
+    agent: options.sync && options.agent.enabled
+      ? createRuntimeAgentBridge({
+          endpoint: options.sync.endpoint,
+          projectId: options.projectId,
+        })
       : undefined,
     notify(notification) {
       for (const listener of notificationListeners) {
@@ -105,6 +112,7 @@ export function runAgentationRuntime(options: ResolvedAgentationVueOptions): voi
   const settings = createSettingsState({
     outputDetail: options.outputDetail,
     locale: options.locale,
+    agentAutoSendEnabled: options.agent.autoSend,
   })
   const areaSelection = createAreaSelectionState()
 
@@ -133,6 +141,7 @@ export function runAgentationRuntime(options: ResolvedAgentationVueOptions): voi
   // 6. Expose runtime context for HMR disposal + console debugging
   window.__agentationRuntime = {
     dispose() {
+      bridge.agent?.dispose()
       bridge.sync?.dispose()
       app.unmount()
       listeners.dispose()

@@ -45,8 +45,7 @@ export function resolveMcpCliPath(
 }
 
 export function createSharedServerSpawnSpec(
-  apiPort: number,
-  mcpPort: number,
+  port: number,
   resolveCliPath: () => string | null = resolveMcpCliPath,
 ): SharedServerSpawnSpec | null {
   const cliPath = resolveCliPath()
@@ -60,9 +59,7 @@ export function createSharedServerSpawnSpec(
       cliPath,
       "server",
       "--port",
-      String(apiPort),
-      "--mcp-port",
-      String(mcpPort),
+      String(port),
       "--no-stdio",
     ],
   }

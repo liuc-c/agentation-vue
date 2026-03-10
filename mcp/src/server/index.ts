@@ -7,13 +7,13 @@
  * - MCP server for Claude Code to read and act on annotations
  *
  * Usage:
- *   npx agentation-vue-mcp server [--port 4747] [--mcp-only] [--http-url URL]
- *   agentation-vue-mcp server [--port 4747] [--mcp-only] [--http-url URL]
+ *   npx agentation-vue-mcp server [--port 4748] [--mcp-only] [--http-url URL]
+ *   agentation-vue-mcp server [--port 4748] [--mcp-only] [--http-url URL]
  *
  * Options:
- *   --port <number>   HTTP server port (default: 4747)
- *   --mcp-only        Skip HTTP server, only run MCP on stdio (for Claude Code MCP config)
- *   --http-url <url>  HTTP server URL for MCP to fetch from (default: http://localhost:4747)
+ *   --port <number>   Unified companion port (default: 4748)
+ *   --mcp-only        Skip the local HTTP companion and only run MCP on stdio
+ *   --http-url <url>  Agentation API URL for MCP tools to fetch from (default: http://localhost:4748)
  */
 
 import { startHttpServer } from "./http.js";
@@ -22,6 +22,7 @@ import { startMcpHttpServer, startMcpServer, setApiKey } from "./mcp.js";
 // Re-export for programmatic use
 export { startHttpServer, setCloudApiKey } from "./http.js";
 export { startMcpHttpServer, startMcpServer, setApiKey } from "./mcp.js";
+export { AgentManager } from "./agent-manager.js";
 export * from "./store.js";
 
 // -----------------------------------------------------------------------------
@@ -30,50 +31,40 @@ export * from "./store.js";
 
 function parseArgs(): {
   port: number
-  mcpPort: number
   mcpOnly: boolean
   httpUrl: string
   noStdio: boolean
 } {
-  const args = process.argv.slice(2);
-  let port = 4747;
-  let mcpPort = 4748;
-  let mcpOnly = false;
-  let httpUrl = "http://localhost:4747";
-  let noStdio = false;
+  const args = process.argv.slice(2)
+  let port = 4748
+  let mcpOnly = false
+  let httpUrl = "http://localhost:4748"
+  let noStdio = false
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--port" && args[i + 1]) {
-      const parsed = parseInt(args[i + 1], 10);
+      const parsed = parseInt(args[i + 1], 10)
       if (!isNaN(parsed) && parsed > 0 && parsed < 65536) {
-        port = parsed;
-        // Also update httpUrl if port changes and httpUrl wasn't explicitly set
+        port = parsed
         if (!args.includes("--http-url")) {
-          httpUrl = `http://localhost:${port}`;
+          httpUrl = `http://localhost:${port}`
         }
       }
-      i++;
-    }
-    if (args[i] === "--mcp-port" && args[i + 1]) {
-      const parsed = parseInt(args[i + 1], 10);
-      if (!isNaN(parsed) && parsed > 0 && parsed < 65536) {
-        mcpPort = parsed;
-      }
-      i++;
+      i++
     }
     if (args[i] === "--mcp-only") {
-      mcpOnly = true;
+      mcpOnly = true
     }
     if (args[i] === "--no-stdio") {
-      noStdio = true;
+      noStdio = true
     }
     if (args[i] === "--http-url" && args[i + 1]) {
-      httpUrl = args[i + 1];
-      i++;
+      httpUrl = args[i + 1]
+      i++
     }
   }
 
-  return { port, mcpPort, mcpOnly, httpUrl, noStdio };
+  return { port, mcpOnly, httpUrl, noStdio }
 }
 
 // -----------------------------------------------------------------------------
@@ -81,18 +72,13 @@ function parseArgs(): {
 // -----------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  const { port, mcpPort, mcpOnly, httpUrl, noStdio } = parseArgs();
+  const { port, mcpOnly, httpUrl, noStdio } = parseArgs()
 
-  // Start HTTP server (for browser clients) - skip if --mcp-only
   if (!mcpOnly) {
-    startHttpServer(port);
+    startHttpServer(port)
   }
 
-  // Start MCP network transport (for remote/http MCP clients)
-  startMcpHttpServer(mcpPort, httpUrl);
-
-  // Start MCP stdio transport unless explicitly disabled.
   if (!noStdio) {
-    await startMcpServer(httpUrl);
+    await startMcpServer(httpUrl)
   }
 }

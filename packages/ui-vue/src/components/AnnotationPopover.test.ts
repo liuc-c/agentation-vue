@@ -76,8 +76,8 @@ function makeProvides(overrides?: { popoverVisible?: boolean; editingAnnotation?
     autoClearAfterCopy: false,
     blockInteractions: true,
     locale: "en" as const,
-    webhookUrl: "",
-    webhooksEnabled: false,
+    agentAutoSendEnabled: false,
+    selectedAgentId: "",
     toggleDarkMode: vi.fn(),
   }
 

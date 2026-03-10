@@ -198,11 +198,11 @@ export type UserContext = {
 
 export interface AFSStore {
   // Sessions (shared across v1 and v2)
-  createSession(url: string, projectId?: string): Session;
+  createSession(url: string, projectId?: string, metadata?: Record<string, unknown>): Session;
   getSession(id: string): Session | undefined;
   getSessionWithAnnotations(id: string): SessionWithAnnotations | undefined;
   getSessionWithAnnotationsV2(id: string): SessionWithAnnotationsV2 | undefined;
-  updateSessionProjectId(id: string, projectId?: string): Session | undefined;
+  updateSessionProjectId(id: string, projectId?: string, metadata?: Record<string, unknown>): Session | undefined;
   updateSessionStatus(id: string, status: SessionStatus): Session | undefined;
   listSessions(): Session[];
 

@@ -15,7 +15,7 @@ function makeMockBridge(): RuntimeBridge {
     },
     sync: {
       info: {
-        endpoint: "http://localhost:4747",
+        endpoint: "http://localhost:4748",
         mcpEndpoint: "http://localhost:4748",
         mcpHttpUrl: "http://localhost:4748/mcp",
         mcpSseUrl: "http://localhost:4748/sse",

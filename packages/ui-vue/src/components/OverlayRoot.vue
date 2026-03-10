@@ -73,6 +73,7 @@ onMounted(() => {
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 let unsubscribeNotifications: (() => void) | null = null
 let unsubscribeSync: (() => void) | null = null
+let unsubscribeAgent: (() => void) | null = null
 
 onMounted(() => {
   unsubscribeNotifications = props.bridge.subscribeNotifications?.((notification) => {
@@ -112,11 +113,43 @@ onMounted(() => {
       })
     }
   }) ?? null
+
+  unsubscribeAgent = props.bridge.agent?.subscribe((event) => {
+    if (event.type === "error" && event.message) {
+      props.bridge.notify?.({
+        kind: "warning",
+        duration: 2800,
+        message: i18n.messages.notifications.agentBridgeFailed(event.message),
+      })
+      return
+    }
+
+    if (event.type === "dispatch" && event.dispatch?.message) {
+      const state = event.dispatch.state
+      if (state === "failed") {
+        props.bridge.notify?.({
+          kind: "warning",
+          duration: 3000,
+          message: i18n.messages.notifications.agentDispatchFailed(event.dispatch.message),
+        })
+        return
+      }
+
+      if (state === "succeeded") {
+        props.bridge.notify?.({
+          kind: "info",
+          duration: 2200,
+          message: i18n.messages.notifications.agentDispatchSucceeded(event.dispatch.message),
+        })
+      }
+    }
+  }) ?? null
 })
 
 onUnmounted(() => {
   unsubscribeNotifications?.()
   unsubscribeSync?.()
+  unsubscribeAgent?.()
   if (toastTimer) {
     clearTimeout(toastTimer)
   }
@@ -163,6 +196,18 @@ watch(
   },
   { immediate: true },
 )
+
+watch(
+  () => settings.agentAutoSendEnabled,
+  (enabled) => {
+    props.bridge.agent?.setAutoMode(enabled)
+  },
+  { immediate: true },
+)
+
+onMounted(() => {
+  void props.bridge.agent?.init(settings.selectedAgentId || undefined, settings.agentAutoSendEnabled)
+})
 </script>
 
 <template>

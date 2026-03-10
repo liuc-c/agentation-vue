@@ -422,13 +422,14 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
 
   return {
     // Sessions
-    createSession(url: string, projectId?: string): Session {
+    createSession(url: string, projectId?: string, metadata?: Record<string, unknown>): Session {
       const session: Session = {
         id: generateId(),
         url,
         status: "active",
         createdAt: new Date().toISOString(),
         projectId,
+        metadata,
       };
 
       stmts.insertSession.run({
@@ -437,7 +438,7 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
         status: session.status,
         createdAt: session.createdAt,
         projectId: session.projectId ?? null,
-        metadata: null,
+        metadata: metadata ? JSON.stringify(metadata) : null,
       });
 
       const event = eventBus.emit("session.created", session.id, session);
@@ -463,14 +464,30 @@ export function createSQLiteStore(dbPath?: string): AFSStore {
       };
     },
 
-    updateSessionProjectId(id: string, projectId?: string): Session | undefined {
+    updateSessionProjectId(id: string, projectId?: string, metadata?: Record<string, unknown>): Session | undefined {
+      const existing = this.getSession(id);
+      if (!existing) return undefined;
+
       const updatedAt = new Date().toISOString();
       const result = stmts.updateSessionProjectId.run({
         id,
-        projectId: projectId ?? null,
+        projectId: projectId ?? existing.projectId ?? null,
         updatedAt,
       });
       if (result.changes === 0) return undefined;
+
+      if (metadata) {
+        db.prepare(
+          "UPDATE sessions SET metadata = @metadata, updated_at = @updatedAt WHERE id = @id",
+        ).run({
+          id,
+          metadata: JSON.stringify({
+            ...(existing.metadata ?? {}),
+            ...metadata,
+          }),
+          updatedAt,
+        });
+      }
 
       const session = this.getSession(id);
       if (session) {

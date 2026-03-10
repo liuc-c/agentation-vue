@@ -15,6 +15,7 @@ export interface RuntimeSyncInfo {
   endpoint: string
   mcpEndpoint?: string
   projectId?: string
+  projectRoot?: string
   mcpHttpUrl?: string
   mcpSseUrl?: string
 }
@@ -24,6 +25,65 @@ export interface RuntimeSyncEvent {
   source: "init" | "flush" | "remote"
   annotationCount?: number
   message?: string
+}
+
+export type AgentKind = string
+export type AgentStatus = "available" | "missing" | "connecting" | "ready" | "busy" | "error"
+
+export interface AgentSummary {
+  id: string
+  label: string
+  kind: AgentKind
+  icon?: string
+  description?: string
+  homepage?: string
+  installHint?: string
+  available: boolean
+  status: AgentStatus
+  isDefault: boolean
+  isActive: boolean
+  lastError?: string
+}
+
+export interface AgentDispatchState {
+  projectId: string
+  agentId?: string
+  mode: "auto" | "manual"
+  trigger: "annotation.upsert" | "manual.send"
+  state: "idle" | "sending" | "succeeded" | "failed" | "cancelled" | "skipped"
+  message?: string
+  updatedAt: string
+}
+
+export interface RuntimeAgentState {
+  projectId?: string
+  agents: AgentSummary[]
+  dispatch?: AgentDispatchState
+}
+
+export interface RuntimeAgentEvent {
+  type: "list" | "status" | "dispatch" | "error"
+  projectId?: string
+  agents?: AgentSummary[]
+  agent?: AgentSummary
+  dispatch?: AgentDispatchState
+  message?: string
+  timestamp: string
+}
+
+export interface RuntimeAgentBridge {
+  readonly projectId?: string
+  init(selectedAgentId?: string, autoMode?: boolean): Promise<void>
+  setAutoMode(enabled: boolean): void
+  listAgents(): Promise<RuntimeAgentState>
+  selectAgent(agentId: string): Promise<RuntimeAgentState>
+  connect(agentId?: string): Promise<RuntimeAgentState>
+  disconnect(agentId?: string): Promise<RuntimeAgentState>
+  dispatch(mode: "auto" | "manual", trigger: "annotation.upsert" | "manual.send", sessionId?: string): Promise<RuntimeAgentState>
+  enqueueAutoDispatch(trigger: "annotation.upsert" | "manual.send", sessionId?: string): void
+  cancelDispatch(): Promise<RuntimeAgentState>
+  subscribe(listener: (event: RuntimeAgentEvent) => void): () => void
+  dispose(): void
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +127,8 @@ export interface RuntimeBridge {
   storage: RuntimeStorageBridge
   /** Optional sync bridge — present when sync is configured. */
   sync?: RuntimeSyncBridge
+  /** Optional agent bridge — present when local companion features are enabled. */
+  agent?: RuntimeAgentBridge
   /** Emit a UI notification to the overlay. */
   notify?(notification: UiNotification): void
   /** Subscribe to UI notifications emitted through the runtime bridge. */

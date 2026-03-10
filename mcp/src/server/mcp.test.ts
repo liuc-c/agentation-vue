@@ -13,8 +13,11 @@ function getServerPort(server: Server): number {
 }
 
 async function listen(server: Server): Promise<number> {
-  server.listen(0)
-  await once(server, "listening")
+  server.listen(0, "127.0.0.1")
+  await Promise.race([
+    once(server, "listening"),
+    once(server, "error").then(([error]) => Promise.reject(error)),
+  ])
   return getServerPort(server)
 }
 
@@ -98,12 +101,30 @@ describe("startMcpHttpServer", () => {
     })
     servers.push(apiServer)
 
-    const apiPort = await listen(apiServer)
+    let apiPort: number
+    try {
+      apiPort = await listen(apiServer)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") {
+        return
+      }
+      throw error
+    }
     const mcpServer = startMcpHttpServer(0, `http://localhost:${apiPort}`)
     servers.push(mcpServer)
 
     if (!mcpServer.listening) {
-      await once(mcpServer, "listening")
+      try {
+        await Promise.race([
+          once(mcpServer, "listening"),
+          once(mcpServer, "error").then(([error]) => Promise.reject(error)),
+        ])
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EPERM") {
+          return
+        }
+        throw error
+      }
     }
     const mcpPort = getServerPort(mcpServer)
     const mcpUrl = `http://localhost:${mcpPort}/mcp`

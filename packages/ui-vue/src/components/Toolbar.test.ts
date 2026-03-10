@@ -40,6 +40,16 @@ function makeProvides(options?: {
   showMarkers?: boolean
   copyFormat?: SettingsState["copyFormat"]
   sync?: boolean
+  agents?: Array<{
+    id: string
+    label: string
+    kind: "claude" | "codex" | "gemini"
+    available: boolean
+    status: "available" | "missing" | "connecting" | "ready" | "busy" | "error"
+    isDefault?: boolean
+    isActive?: boolean
+    lastError?: string
+  }>
 }) {
   const store: AnnotationsStore = {
     annotations: options?.annotations ?? [],
@@ -84,8 +94,8 @@ function makeProvides(options?: {
     autoClearAfterCopy: false,
     blockInteractions: true,
     locale: "en",
-    webhookUrl: "",
-    webhooksEnabled: false,
+    agentAutoSendEnabled: false,
+    selectedAgentId: "",
     toggleDarkMode() {
       settings.darkMode = !settings.darkMode
     },
@@ -113,7 +123,7 @@ function makeProvides(options?: {
   if (options?.sync) {
     bridge.sync = {
       info: {
-        endpoint: "http://localhost:4747",
+        endpoint: "http://localhost:4748",
         mcpEndpoint: "http://localhost:4748",
         mcpHttpUrl: "http://localhost:4748/mcp",
         mcpSseUrl: "http://localhost:4748/sse",
@@ -124,6 +134,69 @@ function makeProvides(options?: {
       enqueueUpdate: vi.fn(),
       enqueueDelete: vi.fn(),
       subscribe: vi.fn().mockReturnValue(() => {}),
+      dispose: vi.fn(),
+    }
+
+    const state = {
+      projectId: "demo-app",
+      agents: options.agents ?? [{
+        id: "claude",
+        label: "Claude",
+        kind: "claude" as const,
+        available: true,
+        status: "ready" as const,
+        isDefault: true,
+        isActive: true,
+      }],
+      dispatch: undefined,
+    }
+    const listeners = new Set<(event: any) => void>()
+
+    bridge.agent = {
+      projectId: "demo-app",
+      init: vi.fn().mockResolvedValue(undefined),
+      setAutoMode: vi.fn(),
+      listAgents: vi.fn().mockImplementation(async () => state),
+      selectAgent: vi.fn().mockImplementation(async (agentId: string) => {
+        state.agents = state.agents.map((agent) => ({
+          ...agent,
+          isActive: agent.id === agentId,
+        }))
+        return state
+      }),
+      connect: vi.fn().mockImplementation(async () => state),
+      disconnect: vi.fn().mockImplementation(async () => state),
+      dispatch: vi.fn().mockImplementation(async () => {
+        state.dispatch = {
+          projectId: "demo-app",
+          agentId: state.agents.find((agent) => agent.isActive)?.id,
+          mode: "manual",
+          trigger: "manual.send",
+          state: "succeeded",
+          message: "Turn completed",
+          updatedAt: new Date().toISOString(),
+        }
+        return state
+      }),
+      enqueueAutoDispatch: vi.fn(),
+      cancelDispatch: vi.fn().mockImplementation(async () => {
+        state.dispatch = {
+          projectId: "demo-app",
+          agentId: state.agents.find((agent) => agent.isActive)?.id,
+          mode: "manual",
+          trigger: "manual.send",
+          state: "cancelled",
+          message: "Cancelled current agent turn",
+          updatedAt: new Date().toISOString(),
+        }
+        return state
+      }),
+      subscribe: vi.fn().mockImplementation((listener: (event: any) => void) => {
+        listeners.add(listener)
+        return () => {
+          listeners.delete(listener)
+        }
+      }),
       dispose: vi.fn(),
     }
   }
@@ -262,46 +335,73 @@ describe("Toolbar", () => {
     expect(COPY_EXCLUDE_FIELDS).toContain("projectArea")
   })
 
-  it("opens the MCP & Webhooks page from settings navigation", async () => {
+  it("keeps agent controls inside settings instead of rendering a dedicated toolbar button", async () => {
     const { wrapper } = mountToolbar({ sync: true })
 
     await expandToolbar(wrapper)
-    expect(wrapper.find('button[aria-label="Manage MCP & Webhooks"]').exists()).toBe(false)
+
+    expect(wrapper.find('button[aria-label="Open agent workspace"]').exists()).toBe(false)
+    expect(wrapper.find('button[aria-label="Toggle settings"]').exists()).toBe(true)
+  })
+
+  it("opens the agent workspace page from settings navigation", async () => {
+    const { wrapper } = mountToolbar({ sync: true })
+
+    await expandToolbar(wrapper)
     await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
     const automationsButton = wrapper.findAll(".nav-btn").find(
-      (button) => button.text().includes("Manage MCP & Webhooks"),
+      (button) => button.text().includes("Agent workspace"),
     )
     expect(automationsButton).toBeDefined()
     await automationsButton!.trigger("click")
 
-    expect(wrapper.findAll(".back-btn")[1]!.text()).toContain("Manage MCP & Webhooks")
+    expect(wrapper.findAll(".back-btn")[1]!.text()).toContain("Agent workspace")
     expect(wrapper.find(".mcp-status").text()).toContain("Connected")
-    expect(wrapper.text()).toContain("http://localhost:4748/mcp")
+    expect(wrapper.text()).toContain("Claude")
+    expect(wrapper.text()).toContain("http://localhost:4748")
   })
 
-  it("restores webhook settings from the MCP & Webhooks page", async () => {
+  it("updates auto-send agent settings from the agent workspace page", async () => {
     const { wrapper, settings } = mountToolbar({ sync: true })
 
     await expandToolbar(wrapper)
     await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
     const automationsButton = wrapper.findAll(".nav-btn").find(
-      (button) => button.text().includes("Manage MCP & Webhooks"),
+      (button) => button.text().includes("Agent workspace"),
     )
     expect(automationsButton).toBeDefined()
     await automationsButton!.trigger("click")
 
-    expect(wrapper.text()).toContain("Webhooks")
-    expect(wrapper.text()).toContain("MCP Connection")
+    expect(wrapper.text()).toContain("Companion status")
+    expect(wrapper.text()).toContain("Available on this machine")
     expect(wrapper.text()).toContain("Connected")
-    expect(wrapper.text()).not.toContain("CLI server")
-    expect(wrapper.text()).not.toContain("Claude CLI")
+    expect(wrapper.text()).toContain("Auto-send to active agent")
 
     await wrapper.find(".webhook-toggle input").setValue(true)
-    await wrapper.find(".webhook-url").setValue("https://example.com/webhook")
     await nextTick()
 
-    expect(settings.webhooksEnabled).toBe(true)
-    expect(settings.webhookUrl).toBe("https://example.com/webhook")
+    expect(settings.agentAutoSendEnabled).toBe(true)
+  })
+
+  it("manually dispatches pending work to the active agent", async () => {
+    const { wrapper, bridge } = mountToolbar({ sync: true })
+
+    await expandToolbar(wrapper)
+    await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
+    const automationsButton = wrapper.findAll(".nav-btn").find(
+      (button) => button.text().includes("Agent workspace"),
+    )
+    expect(automationsButton).toBeDefined()
+    await automationsButton!.trigger("click")
+
+    const sendButton = wrapper.findAll("button").find(
+      (button) => button.text().includes("Send now"),
+    )
+    expect(sendButton).toBeDefined()
+    await sendButton!.trigger("click")
+
+    expect(bridge.agent?.dispatch).toHaveBeenCalledWith("manual", "manual.send")
+    expect(wrapper.text()).toContain("Turn completed")
   })
 
   it("sizes the settings panel to the active page and caps tall pages", async () => {
@@ -331,7 +431,7 @@ describe("Toolbar", () => {
     expect(wrapper.find(".settings-pages").attributes("style")).toContain("height: 240px;")
 
     const automationsButton = wrapper.findAll(".nav-btn").find(
-      (button) => button.text().includes("Manage MCP & Webhooks"),
+      (button) => button.text().includes("Agent workspace"),
     )
     expect(automationsButton).toBeDefined()
     await automationsButton!.trigger("click")
@@ -352,15 +452,15 @@ describe("Toolbar", () => {
     await expandToolbar(wrapper)
     await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
     const automationsButton = wrapper.findAll(".nav-btn").find(
-      (button) => button.text().includes("Manage MCP & Webhooks"),
+      (button) => button.text().includes("Agent workspace"),
     )
     expect(automationsButton).toBeDefined()
     await automationsButton!.trigger("click")
-    await wrapper.find('button[aria-label="Copy Streamable HTTP MCP"]').trigger("click")
+    await wrapper.find('button[aria-label="Copy MCP /mcp endpoint"]').trigger("click")
     await nextTick()
 
     expect(clipboardWrite).toHaveBeenCalledWith("http://localhost:4748/mcp")
-    expect(wrapper.find('button[aria-label="Copy Streamable HTTP MCP"]').attributes("data-copied")).toBeDefined()
+    expect(wrapper.find('button[aria-label="Copy MCP /mcp endpoint"]').attributes("data-copied")).toBeDefined()
   })
 
   it("switches copy format in settings and updates the toolbar copy action", async () => {

@@ -20,6 +20,13 @@ import {
   updateSessionProjectId,
 } from "./store.js"
 import { eventBus } from "./events.js"
+import { AgentManager } from "./agent-manager.js"
+import {
+  buildMcpTransportUrls,
+  handleMcpTransportRequest,
+  isMcpTransportPath,
+  setHttpBaseUrl,
+} from "./mcp.js"
 import {
   filterSessionsByProject,
   matchesProjectFilter,
@@ -37,6 +44,7 @@ function log(message: string): void {
 
 let cloudApiKey: string | undefined
 const CLOUD_API_URL = "https://agentation-mcp-cloud.vercel.app/api"
+let agentManager: AgentManager | null = null
 
 export function setCloudApiKey(key: string | undefined): void {
   cloudApiKey = key
@@ -47,6 +55,7 @@ function isCloudMode(): boolean {
 }
 
 const sseConnections = new Set<ServerResponse>()
+const agentSseConnections = new Set<ServerResponse>()
 
 type RouteHandler = (
   req: IncomingMessage,
@@ -355,12 +364,12 @@ function buildWebhookPayload(
 
 const createSessionHandler: RouteHandler = async (req, res) => {
   try {
-    const body = await parseBody<{ url?: string; projectId?: string }>(req)
+    const body = await parseBody<{ url?: string; projectId?: string; metadata?: Record<string, unknown> }>(req)
     if (!body.url) {
       return sendError(res, 400, "url is required")
     }
 
-    const session = createSession(body.url, body.projectId)
+    const session = createSession(body.url, body.projectId, body.metadata)
     sendJson(res, 201, session)
   } catch (error) {
     sendError(res, 400, (error as Error).message)
@@ -388,14 +397,13 @@ const getSessionV2Handler: RouteHandler = async (_req, res, params) => {
 
 const updateSessionV2Handler: RouteHandler = async (req, res, params) => {
   try {
-    const body = await parseBody<{ projectId?: string }>(req)
+    const body = await parseBody<{ projectId?: string; metadata?: Record<string, unknown> }>(req)
     const projectId = body.projectId?.trim()
-
-    if (!projectId) {
-      return sendError(res, 400, "projectId is required")
+    if (!projectId && !body.metadata) {
+      return sendError(res, 400, "projectId or metadata is required")
     }
 
-    const session = updateSessionProjectId(params.id, projectId)
+    const session = updateSessionProjectId(params.id, projectId, body.metadata)
     if (!session) {
       return sendError(res, 404, "Session not found")
     }
@@ -559,6 +567,186 @@ const globalSseV2Handler: RouteHandler = async (req, res) => {
   })
 }
 
+function ensureAgentManager(port: number): AgentManager {
+  agentManager = agentManager ?? new AgentManager({
+    httpBaseUrl: `http://localhost:${port}`,
+  })
+  return agentManager
+}
+
+function sendAgentEvent(res: ServerResponse, event: unknown, eventType = "agent"): void {
+  const resolvedType = eventType === "error" ? "agent-error" : eventType
+  res.write(`event: ${resolvedType}\n`)
+  res.write(`data: ${JSON.stringify(event)}\n\n`)
+}
+
+function subscribeAgentEvents(
+  req: IncomingMessage,
+  res: ServerResponse,
+  manager: AgentManager,
+  projectId: string,
+): void {
+  writeSseHeaders(res)
+  agentSseConnections.add(res)
+  res.write(": connected\n\n")
+
+  const unsubscribe = manager.subscribe((event) => {
+    if (event.projectId && event.projectId !== projectId) return
+    sendAgentEvent(res, event, event.type)
+  })
+
+  const keepAlive = setInterval(() => {
+    res.write(": ping\n\n")
+  }, 30000)
+
+  req.on("close", () => {
+    clearInterval(keepAlive)
+    unsubscribe()
+    agentSseConnections.delete(res)
+  })
+}
+
+function requireProjectId(
+  body: { projectId?: string } | URLSearchParams,
+): string | null {
+  const raw = body instanceof URLSearchParams
+    ? body.get("projectId")
+    : body.projectId
+  const projectId = raw?.trim()
+  return projectId || null
+}
+
+const listAgentsHandler = (port: number): RouteHandler => async (req, res) => {
+  const projectId = requireProjectId(new URL(req.url || "/", "http://localhost").searchParams)
+  if (!projectId) {
+    return sendError(res, 400, "projectId is required")
+  }
+
+  const manager = ensureAgentManager(port)
+  sendJson(res, 200, {
+    projectId,
+    agents: manager.listAgents(projectId),
+    dispatch: manager.getDispatchState(projectId),
+  })
+}
+
+const selectAgentHandler = (port: number): RouteHandler => async (req, res) => {
+  try {
+    const body = await parseBody<{ projectId?: string; agentId?: string }>(req)
+    const projectId = requireProjectId(body)
+    const agentId = body.agentId?.trim()
+    if (!projectId || !agentId) {
+      return sendError(res, 400, "projectId and agentId are required")
+    }
+
+    const manager = ensureAgentManager(port)
+    sendJson(res, 200, {
+      projectId,
+      agents: manager.selectAgent(projectId, agentId),
+      dispatch: manager.getDispatchState(projectId),
+    })
+  } catch (error) {
+    sendError(res, 400, (error as Error).message)
+  }
+}
+
+const connectAgentHandler = (port: number): RouteHandler => async (req, res) => {
+  try {
+    const body = await parseBody<{ projectId?: string; agentId?: string }>(req)
+    const projectId = requireProjectId(body)
+    if (!projectId) {
+      return sendError(res, 400, "projectId is required")
+    }
+
+    const manager = ensureAgentManager(port)
+    sendJson(res, 200, {
+      projectId,
+      agents: await manager.connect(projectId, body.agentId?.trim()),
+      dispatch: manager.getDispatchState(projectId),
+    })
+  } catch (error) {
+    sendError(res, 400, (error as Error).message)
+  }
+}
+
+const disconnectAgentHandler = (port: number): RouteHandler => async (req, res) => {
+  try {
+    const body = await parseBody<{ projectId?: string; agentId?: string }>(req)
+    const projectId = requireProjectId(body)
+    if (!projectId) {
+      return sendError(res, 400, "projectId is required")
+    }
+
+    const manager = ensureAgentManager(port)
+    sendJson(res, 200, {
+      projectId,
+      agents: await manager.disconnect(projectId, body.agentId?.trim()),
+      dispatch: manager.getDispatchState(projectId),
+    })
+  } catch (error) {
+    sendError(res, 400, (error as Error).message)
+  }
+}
+
+const agentEventsHandler = (port: number): RouteHandler => async (req, res) => {
+  const projectId = requireProjectId(new URL(req.url || "/", "http://localhost").searchParams)
+  if (!projectId) {
+    return sendError(res, 400, "projectId is required")
+  }
+
+  subscribeAgentEvents(req, res, ensureAgentManager(port), projectId)
+}
+
+const dispatchHandler = (port: number): RouteHandler => async (req, res) => {
+  try {
+    const body = await parseBody<{
+      projectId?: string
+      mode?: "auto" | "manual"
+      trigger?: "annotation.upsert" | "manual.send"
+      sessionId?: string
+    }>(req)
+    const projectId = requireProjectId(body)
+    if (!projectId || !body.mode || !body.trigger) {
+      return sendError(res, 400, "projectId, mode, and trigger are required")
+    }
+
+    const manager = ensureAgentManager(port)
+    const dispatch = await manager.dispatch({
+      projectId,
+      mode: body.mode,
+      trigger: body.trigger,
+      sessionId: body.sessionId?.trim() || undefined,
+    })
+    sendJson(res, 200, {
+      projectId,
+      agents: manager.listAgents(projectId),
+      dispatch,
+    })
+  } catch (error) {
+    sendError(res, 400, (error as Error).message)
+  }
+}
+
+const cancelDispatchHandler = (port: number): RouteHandler => async (req, res) => {
+  try {
+    const body = await parseBody<{ projectId?: string }>(req)
+    const projectId = requireProjectId(body)
+    if (!projectId) {
+      return sendError(res, 400, "projectId is required")
+    }
+
+    const manager = ensureAgentManager(port)
+    const dispatch = await manager.cancelDispatch(projectId)
+    sendJson(res, 200, {
+      projectId,
+      agents: manager.listAgents(projectId),
+      dispatch,
+    })
+  } catch (error) {
+    sendError(res, 400, (error as Error).message)
+  }
+}
+
 type Route = {
   method: string
   pattern: RegExp
@@ -566,88 +754,133 @@ type Route = {
   paramNames: string[]
 }
 
-const routes: Route[] = [
-  {
-    method: "GET",
-    pattern: /^\/v2\/sessions$/,
-    handler: listSessionsHandler,
-    paramNames: [],
-  },
-  {
-    method: "POST",
-    pattern: /^\/v2\/sessions$/,
-    handler: createSessionHandler,
-    paramNames: [],
-  },
-  {
-    method: "GET",
-    pattern: /^\/v2\/sessions\/([^/]+)$/,
-    handler: getSessionV2Handler,
-    paramNames: ["id"],
-  },
-  {
-    method: "PATCH",
-    pattern: /^\/v2\/sessions\/([^/]+)$/,
-    handler: updateSessionV2Handler,
-    paramNames: ["id"],
-  },
-  {
-    method: "GET",
-    pattern: /^\/v2\/sessions\/([^/]+)\/events$/,
-    handler: sseV2Handler,
-    paramNames: ["id"],
-  },
-  {
-    method: "GET",
-    pattern: /^\/v2\/sessions\/([^/]+)\/pending$/,
-    handler: getPendingV2Handler,
-    paramNames: ["id"],
-  },
-  {
-    method: "POST",
-    pattern: /^\/v2\/sessions\/([^/]+)\/annotations$/,
-    handler: addAnnotationV2Handler,
-    paramNames: ["id"],
-  },
-  {
-    method: "PATCH",
-    pattern: /^\/v2\/annotations\/([^/]+)$/,
-    handler: updateAnnotationV2Handler,
-    paramNames: ["id"],
-  },
-  {
-    method: "GET",
-    pattern: /^\/v2\/annotations\/([^/]+)$/,
-    handler: getAnnotationV2Handler,
-    paramNames: ["id"],
-  },
-  {
-    method: "DELETE",
-    pattern: /^\/v2\/annotations\/([^/]+)$/,
-    handler: deleteAnnotationV2Handler,
-    paramNames: ["id"],
-  },
-  {
-    method: "POST",
-    pattern: /^\/v2\/annotations\/([^/]+)\/thread$/,
-    handler: addThreadV2Handler,
-    paramNames: ["id"],
-  },
-  {
-    method: "GET",
-    pattern: /^\/v2\/pending$/,
-    handler: getAllPendingV2Handler,
-    paramNames: [],
-  },
-  {
-    method: "GET",
-    pattern: /^\/v2\/events$/,
-    handler: globalSseV2Handler,
-    paramNames: [],
-  },
-]
+function createRoutes(port: number): Route[] {
+  return [
+    {
+      method: "GET",
+      pattern: /^\/v2\/sessions$/,
+      handler: listSessionsHandler,
+      paramNames: [],
+    },
+    {
+      method: "POST",
+      pattern: /^\/v2\/sessions$/,
+      handler: createSessionHandler,
+      paramNames: [],
+    },
+    {
+      method: "GET",
+      pattern: /^\/v2\/sessions\/([^/]+)$/,
+      handler: getSessionV2Handler,
+      paramNames: ["id"],
+    },
+    {
+      method: "PATCH",
+      pattern: /^\/v2\/sessions\/([^/]+)$/,
+      handler: updateSessionV2Handler,
+      paramNames: ["id"],
+    },
+    {
+      method: "GET",
+      pattern: /^\/v2\/sessions\/([^/]+)\/events$/,
+      handler: sseV2Handler,
+      paramNames: ["id"],
+    },
+    {
+      method: "GET",
+      pattern: /^\/v2\/sessions\/([^/]+)\/pending$/,
+      handler: getPendingV2Handler,
+      paramNames: ["id"],
+    },
+    {
+      method: "POST",
+      pattern: /^\/v2\/sessions\/([^/]+)\/annotations$/,
+      handler: addAnnotationV2Handler,
+      paramNames: ["id"],
+    },
+    {
+      method: "PATCH",
+      pattern: /^\/v2\/annotations\/([^/]+)$/,
+      handler: updateAnnotationV2Handler,
+      paramNames: ["id"],
+    },
+    {
+      method: "GET",
+      pattern: /^\/v2\/annotations\/([^/]+)$/,
+      handler: getAnnotationV2Handler,
+      paramNames: ["id"],
+    },
+    {
+      method: "DELETE",
+      pattern: /^\/v2\/annotations\/([^/]+)$/,
+      handler: deleteAnnotationV2Handler,
+      paramNames: ["id"],
+    },
+    {
+      method: "POST",
+      pattern: /^\/v2\/annotations\/([^/]+)\/thread$/,
+      handler: addThreadV2Handler,
+      paramNames: ["id"],
+    },
+    {
+      method: "GET",
+      pattern: /^\/v2\/pending$/,
+      handler: getAllPendingV2Handler,
+      paramNames: [],
+    },
+    {
+      method: "GET",
+      pattern: /^\/v2\/events$/,
+      handler: globalSseV2Handler,
+      paramNames: [],
+    },
+    {
+      method: "GET",
+      pattern: /^\/v2\/agents$/,
+      handler: listAgentsHandler(port),
+      paramNames: [],
+    },
+    {
+      method: "POST",
+      pattern: /^\/v2\/agents\/select$/,
+      handler: selectAgentHandler(port),
+      paramNames: [],
+    },
+    {
+      method: "POST",
+      pattern: /^\/v2\/agents\/connect$/,
+      handler: connectAgentHandler(port),
+      paramNames: [],
+    },
+    {
+      method: "POST",
+      pattern: /^\/v2\/agents\/disconnect$/,
+      handler: disconnectAgentHandler(port),
+      paramNames: [],
+    },
+    {
+      method: "GET",
+      pattern: /^\/v2\/agents\/events$/,
+      handler: agentEventsHandler(port),
+      paramNames: [],
+    },
+    {
+      method: "POST",
+      pattern: /^\/v2\/dispatch$/,
+      handler: dispatchHandler(port),
+      paramNames: [],
+    },
+    {
+      method: "POST",
+      pattern: /^\/v2\/dispatch\/cancel$/,
+      handler: cancelDispatchHandler(port),
+      paramNames: [],
+    },
+  ]
+}
 
 function matchRoute(
+  routes: Route[],
   method: string,
   pathname: string,
 ): { handler: RouteHandler; params: Record<string, string> } | null {
@@ -667,10 +900,15 @@ function matchRoute(
   return null
 }
 
-export function startHttpServer(port: number, apiKey?: string): void {
+export function startHttpServer(port: number, apiKey?: string) {
   if (apiKey) {
     setCloudApiKey(apiKey)
   }
+
+  setHttpBaseUrl(`http://localhost:${port}`)
+
+  const routes = createRoutes(port)
+  ensureAgentManager(port)
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://localhost:${port}`)
@@ -681,6 +919,10 @@ export function startHttpServer(port: number, apiKey?: string): void {
       log(`[HTTP] ${method} ${pathname}`)
     }
 
+    if (isMcpTransportPath(pathname)) {
+      return handleMcpTransportRequest(req, res, pathname)
+    }
+
     if (method === "OPTIONS") {
       return handleCors(res)
     }
@@ -689,24 +931,34 @@ export function startHttpServer(port: number, apiKey?: string): void {
       return sendJson(res, 200, {
         status: "ok",
         mode: isCloudMode() ? "cloud" : "local",
+        transport: buildMcpTransportUrls(url.origin),
       })
     }
 
     if (pathname === "/status" && method === "GET") {
       const webhookUrls = getWebhookUrls()
+      const manager = ensureAgentManager(port)
       return sendJson(res, 200, {
         mode: isCloudMode() ? "cloud" : "local",
+        companionUrl: url.origin,
+        transport: buildMcpTransportUrls(url.origin),
         webhooksConfigured: webhookUrls.length > 0,
         webhookCount: webhookUrls.length,
         activeEventStreams: sseConnections.size,
+        activeAgentStreams: agentSseConnections.size,
+        agentsAvailable: manager.getAvailableAgentCount(),
+        agentBridgeEnabled: true,
       })
     }
 
     if (isCloudMode()) {
+      if (pathname.startsWith("/v2/agents") || pathname.startsWith("/v2/dispatch")) {
+        return sendError(res, 409, "Local agent bridge is unavailable in cloud mode")
+      }
       return proxyToCloud(req, res, pathname + url.search)
     }
 
-    const match = matchRoute(method, pathname)
+    const match = matchRoute(routes, method, pathname)
     if (!match) {
       return sendError(res, 404, "Not found")
     }
@@ -728,7 +980,7 @@ export function startHttpServer(port: number, apiKey?: string): void {
     log(`[HTTP] Server error: ${error.message}`)
   })
 
-  server.listen(port, () => {
+  server.listen(port, "127.0.0.1", () => {
     if (isCloudMode()) {
       log(`[HTTP] Agentation API listening on http://localhost:${port} (cloud mode)`)
       return
@@ -736,4 +988,6 @@ export function startHttpServer(port: number, apiKey?: string): void {
 
     log(`[HTTP] Agentation API listening on http://localhost:${port}`)
   })
+
+  return server
 }

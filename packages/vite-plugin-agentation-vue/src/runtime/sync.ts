@@ -30,6 +30,7 @@ type StoredAnnotation = AnnotationV2 & { _syncedTo?: string }
 export function createRuntimeSyncBridge(
   sync: AgentationVueSyncOptions,
   storage: AgentationStorageBridge,
+  projectRoot?: string,
 ): RuntimeSyncBridge {
   const pathname = () => window.location.pathname
   const debounceMs = sync.debounceMs ?? 400
@@ -40,6 +41,7 @@ export function createRuntimeSyncBridge(
     endpoint: sync.endpoint.replace(/\/+$/, ""),
     mcpEndpoint,
     projectId: desiredProjectId,
+    projectRoot,
     mcpHttpUrl: mcpEndpoint ? `${mcpEndpoint}/mcp` : undefined,
     mcpSseUrl: mcpEndpoint ? `${mcpEndpoint}/sse` : undefined,
   }
@@ -78,12 +80,18 @@ export function createRuntimeSyncBridge(
       sessionVerified = true
 
       const existingProjectId = session.projectId?.trim() || undefined
+      const existingProjectRoot = typeof session.metadata?.localProjectRoot === "string"
+        ? session.metadata.localProjectRoot
+        : undefined
 
-      if (desiredProjectId && !existingProjectId) {
+      if ((desiredProjectId && !existingProjectId) || (projectRoot && existingProjectRoot !== projectRoot)) {
         try {
-          await apiUpdateSession(sync.endpoint, sid, { projectId: desiredProjectId })
+          await apiUpdateSession(sync.endpoint, sid, {
+            projectId: desiredProjectId,
+            ...(projectRoot ? { metadata: { localProjectRoot: projectRoot } } : {}),
+          })
         } catch (err) {
-          console.warn("[agentation] Failed to backfill session projectId:", sid, err)
+          console.warn("[agentation] Failed to backfill session metadata:", sid, err)
         }
       } else if (desiredProjectId && existingProjectId !== desiredProjectId) {
         clearSessionId(path, storage.options)
@@ -199,7 +207,12 @@ export function createRuntimeSyncBridge(
     }
 
     try {
-      const session = await apiCreateSession(sync.endpoint, window.location.href, desiredProjectId)
+      const session = await apiCreateSession(
+        sync.endpoint,
+        window.location.href,
+        desiredProjectId,
+        projectRoot ? { localProjectRoot: projectRoot } : undefined,
+      )
       sessionId = session.id
       sessionVerified = true
       saveSessionId(pathname(), session.id, storage.options)

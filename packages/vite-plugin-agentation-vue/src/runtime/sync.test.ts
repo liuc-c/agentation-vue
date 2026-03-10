@@ -60,7 +60,7 @@ describe("createRuntimeSyncBridge", () => {
       annotations: [],
     })
     core.getUnsyncedAnnotations.mockReturnValue([])
-    core.resolveV2Endpoint.mockReturnValue("http://localhost:4747/v2")
+    core.resolveV2Endpoint.mockReturnValue("http://localhost:4748/v2")
     core.updateSession.mockResolvedValue({
       id: "sess-existing",
       url: "http://localhost:5173/",
@@ -77,7 +77,7 @@ describe("createRuntimeSyncBridge", () => {
   it("backfills the inferred projectId onto an existing session", async () => {
     const { createRuntimeSyncBridge } = await import("./sync.ts")
     const bridge = createRuntimeSyncBridge({
-      endpoint: "http://localhost:4747",
+      endpoint: "http://localhost:4748",
       projectId: "agentation-vue",
       autoSync: true,
       debounceMs: 0,
@@ -92,7 +92,7 @@ describe("createRuntimeSyncBridge", () => {
     await bridge.init()
 
     expect(core.createSession).not.toHaveBeenCalled()
-    expect(core.updateSession).toHaveBeenCalledWith("http://localhost:4747", "sess-existing", {
+    expect(core.updateSession).toHaveBeenCalledWith("http://localhost:4748", "sess-existing", {
       projectId: "agentation-vue",
     })
     expect(core.saveSessionId).not.toHaveBeenCalled()
@@ -120,7 +120,7 @@ describe("createRuntimeSyncBridge", () => {
 
     const { createRuntimeSyncBridge } = await import("./sync.ts")
     const bridge = createRuntimeSyncBridge({
-      endpoint: "http://localhost:4747",
+      endpoint: "http://localhost:4748",
       projectId: "agentation-vue",
       autoSync: true,
       debounceMs: 0,
@@ -137,9 +137,10 @@ describe("createRuntimeSyncBridge", () => {
     expect(core.updateSession).not.toHaveBeenCalled()
     expect(core.clearSessionId).toHaveBeenCalledWith("/", {})
     expect(core.createSession).toHaveBeenCalledWith(
-      "http://localhost:4747",
+      "http://localhost:4748",
       "http://localhost:3000/",
       "agentation-vue",
+      undefined,
     )
     expect(core.saveSessionId).toHaveBeenCalledWith("/", "sess-new", {})
 

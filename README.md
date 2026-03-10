@@ -164,8 +164,7 @@ Markdown, connect the overlay to `agentation-vue-mcp`.
 ```ts
 agentation({
   sync: {
-    endpoint: "http://localhost:4747",
-    mcpEndpoint: "http://localhost:4748", // optional, defaults to API port + 1
+    endpoint: "http://localhost:4748",
     projectId: "demo-app",                // optional, defaults to workspace-name/relative-path or the Vite root folder name
     autoSync: true,
     debounceMs: 400,
@@ -177,8 +176,8 @@ agentation({
 `sync` is enabled by default during `vite dev`. If you do not want browser
 annotations to sync anywhere, set `sync: false`.
 
-In shared-server mode, multiple local projects can point to the same API and
-MCP transport ports. The Vite plugin health-checks those ports first and
+In shared-server mode, multiple local projects can point to the same
+companion endpoint. The Vite plugin health-checks that endpoint first and
 reuses the existing process when one is already running.
 
 Start the server manually from this repo:
@@ -190,11 +189,12 @@ pnpm mcp
 Or use the published MCP package directly:
 
 ```bash
-npx agentation-vue-mcp server --port 4747 --mcp-port 4748
+npx agentation-vue-mcp server --port 4748
 ```
 
-The browser sync API listens on `4747` by default. MCP clients connect to
-`4748` over either streamable HTTP (`/mcp`), legacy SSE (`/sse`), or stdio.
+The unified local companion listens on `4748` by default. Browser sync uses
+`/v2/*`, and MCP clients connect over either streamable HTTP (`/mcp`), legacy
+SSE (`/sse`), or stdio on the same port.
 
 ### Get Started Flow
 
@@ -220,7 +220,7 @@ Recommended local setup:
 | `locale` | `"en" \| "zh-CN"` | `"en"` | Default UI locale. |
 | `storagePrefix` | `string` | `"agentation-vue-"` | Prefix for persisted annotation data in storage. |
 | `outputDetail` | `"compact" \| "standard" \| "detailed" \| "forensic"` | `"standard"` | Controls how much metadata is included in exports. |
-| `sync` | `{ endpoint?: string, mcpEndpoint?: string, projectId?: string, autoSync?: boolean, debounceMs?: number, ensureServer?: boolean } \| false` | enabled in `serve` | Sends annotations to the shared Agentation V2 API and MCP workflow server. |
+| `sync` | `{ endpoint?: string, mcpEndpoint?: string, projectId?: string, autoSync?: boolean, debounceMs?: number, ensureServer?: boolean } \| false` | enabled in `serve` | Sends annotations to the unified Agentation companion. |
 | `inspector` | `"tracer"` | `"tracer"` | Source resolution strategy. Reserved for future alternatives. |
 
 ## Output Detail Levels

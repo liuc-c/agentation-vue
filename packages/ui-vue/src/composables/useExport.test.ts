@@ -69,8 +69,8 @@ function makeMockSettings(): SettingsState {
     autoClearAfterCopy: false,
     blockInteractions: true,
     locale: "en",
-    webhookUrl: "",
-    webhooksEnabled: false,
+    agentAutoSendEnabled: false,
+    selectedAgentId: "",
     toggleDarkMode: vi.fn(),
   }
 }

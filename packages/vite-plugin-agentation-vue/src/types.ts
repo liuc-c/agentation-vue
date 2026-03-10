@@ -12,9 +12,9 @@ import type { Locale } from "@liuovo/agentation-vue-ui"
 // ---------------------------------------------------------------------------
 
 export interface AgentationVueSyncOptions {
-  /** Sync endpoint URL (default: "http://localhost:4747") */
+  /** Unified companion endpoint URL (default: "http://localhost:4748") */
   endpoint: string
-  /** Optional MCP transport endpoint. When omitted, defaults to endpoint port + 1. */
+  /** @deprecated MCP now shares the same endpoint as the V2 API companion. */
   mcpEndpoint?: string
   /** Optional stable project identifier for multi-project shared servers. */
   projectId?: string
@@ -30,8 +30,15 @@ export interface AgentationVueSyncOptions {
   ensureServer?: boolean
 }
 
+export interface AgentationVueAgentOptions {
+  /** Whether the agent companion UI and runtime bridge are enabled. */
+  enabled?: boolean
+  /** Whether new or updated annotations auto-dispatch to the active agent. */
+  autoSend?: boolean
+}
+
 export const DEFAULT_AGENTATION_SYNC_OPTIONS: Readonly<Required<Omit<AgentationVueSyncOptions, "mcpEndpoint" | "projectId">>> = {
-  endpoint: "http://localhost:4747",
+  endpoint: "http://localhost:4748",
   autoSync: true,
   debounceMs: 400,
   ensureServer: true,
@@ -48,6 +55,8 @@ export interface AgentationVueOptions {
   locale?: Locale
   /** Sync endpoint configuration for shared Agentation API/MCP workflow. Defaults on unless set to false. */
   sync?: AgentationVueSyncOptions | false
+  /** Local ACP companion bridge configuration. */
+  agent?: AgentationVueAgentOptions | false
   /** Inspector strategy (default: "tracer") — reserved for future alternatives */
   inspector?: "tracer"
 }
@@ -63,9 +72,14 @@ export interface ResolvedAgentationVueOptions {
   enabled: boolean
   storagePrefix: string
   projectId?: string
+  projectRoot?: string
   outputDetail: OutputDetailLevel
   locale: Locale
   sync: AgentationVueSyncOptions | false
+  agent: {
+    enabled: boolean
+    autoSend: boolean
+  }
   inspector: "tracer"
 }
 
@@ -91,6 +105,10 @@ export function resolveOptions(
 ): ResolvedAgentationVueOptions {
   const configuredSync = raw.sync === false ? undefined : raw.sync
   const projectId = configuredSync?.projectId?.trim() || inferProjectIdFromRoot(rootDir)
+  const configuredAgent = raw.agent === false ? { enabled: false, autoSend: false } : {
+    enabled: raw.agent?.enabled ?? command === "serve",
+    autoSend: raw.agent?.autoSend ?? false,
+  }
   const resolvedSync = raw.sync === false
     ? false
     : {
@@ -103,32 +121,17 @@ export function resolveOptions(
     enabled: raw.enabled ?? (command === "serve"),
     storagePrefix: raw.storagePrefix ?? DEFAULT_STORAGE_PREFIX,
     projectId,
+    projectRoot: rootDir,
     outputDetail: raw.outputDetail ?? "standard",
     locale: raw.locale ?? "en",
     sync: resolvedSync,
+    agent: configuredAgent,
     inspector: raw.inspector ?? "tracer",
   }
 }
 
 export function resolveMcpEndpoint(sync: AgentationVueSyncOptions): string | undefined {
-  if (sync.mcpEndpoint) {
-    return sync.mcpEndpoint.replace(/\/+$/, "")
-  }
-
-  try {
-    const apiUrl = new URL(sync.endpoint)
-    const protocolDefaultPort = apiUrl.protocol === "https:" ? 443 : 80
-    const apiPort = parseInt(apiUrl.port || String(protocolDefaultPort), 10)
-    if (!Number.isFinite(apiPort)) {
-      return undefined
-    }
-
-    const nextPort = apiPort + 1
-    apiUrl.port = String(nextPort)
-    return apiUrl.toString().replace(/\/+$/, "")
-  } catch {
-    return undefined
-  }
+  return (sync.mcpEndpoint || sync.endpoint).replace(/\/+$/, "")
 }
 
 // ---------------------------------------------------------------------------
