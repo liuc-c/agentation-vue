@@ -169,6 +169,8 @@ function getStatusLabel(annotation: AnnotationV2): string {
   switch (getStatus(annotation)) {
     case "acknowledged":
       return messages.value.workflow.statusAcknowledged
+    case "processing":
+      return messages.value.workflow.statusProcessing
     case "resolved":
       return messages.value.workflow.statusResolved
     case "dismissed":
@@ -182,6 +184,8 @@ function getMarkerColor(annotation: AnnotationV2): string {
   switch (getStatus(annotation)) {
     case "acknowledged":
       return "#0ea5e9"
+    case "processing":
+      return "#f59e0b"
     case "resolved":
       return "#22c55e"
     case "dismissed":
@@ -388,6 +392,11 @@ function getBoundingBox(annotation: AnnotationV2): BoundingBox | undefined {
 .tooltip-status[data-status="acknowledged"] {
   background: rgba(14, 165, 233, 0.16);
   color: #67e8f9;
+}
+
+.tooltip-status[data-status="processing"] {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fcd34d;
 }
 
 .tooltip-status[data-status="resolved"] {

@@ -29,6 +29,7 @@ export interface RuntimeSyncEvent {
 
 export type AgentKind = string
 export type AgentStatus = "available" | "missing" | "connecting" | "ready" | "busy" | "error"
+export type AgentSessionStatus = "active" | "approved" | "closed"
 
 export interface AgentSummary {
   id: string
@@ -48,17 +49,34 @@ export interface AgentSummary {
 export interface AgentDispatchState {
   projectId: string
   agentId?: string
+  runId?: string
   mode: "auto" | "manual"
   trigger: "annotation.upsert" | "manual.send"
   state: "idle" | "sending" | "succeeded" | "failed" | "cancelled" | "skipped"
+  claimedCount?: number
   message?: string
   updatedAt: string
+}
+
+export interface AgentSessionSummary {
+  id: string
+  url: string
+  status: AgentSessionStatus
+  createdAt: string
+  updatedAt?: string
+  projectId?: string
+  annotationCount: number
 }
 
 export interface RuntimeAgentState {
   projectId?: string
   agents: AgentSummary[]
   dispatch?: AgentDispatchState
+}
+
+export interface RuntimeAgentSessionsState {
+  projectId?: string
+  sessions: AgentSessionSummary[]
 }
 
 export interface RuntimeAgentEvent {
@@ -76,10 +94,12 @@ export interface RuntimeAgentBridge {
   init(selectedAgentId?: string, autoMode?: boolean): Promise<void>
   setAutoMode(enabled: boolean): void
   listAgents(): Promise<RuntimeAgentState>
+  listSessions(): Promise<RuntimeAgentSessionsState>
   selectAgent(agentId: string): Promise<RuntimeAgentState>
   connect(agentId?: string): Promise<RuntimeAgentState>
   disconnect(agentId?: string): Promise<RuntimeAgentState>
   dispatch(mode: "auto" | "manual", trigger: "annotation.upsert" | "manual.send", sessionId?: string): Promise<RuntimeAgentState>
+  closeSession(sessionId: string): Promise<RuntimeAgentSessionsState>
   enqueueAutoDispatch(trigger: "annotation.upsert" | "manual.send", sessionId?: string): void
   cancelDispatch(): Promise<RuntimeAgentState>
   subscribe(listener: (event: RuntimeAgentEvent) => void): () => void

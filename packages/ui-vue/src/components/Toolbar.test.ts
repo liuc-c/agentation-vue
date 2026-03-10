@@ -148,6 +148,23 @@ function makeProvides(options?: {
         isDefault: true,
         isActive: true,
       }],
+      sessions: [{
+        id: "sess-active",
+        url: "http://localhost:5173/",
+        status: "active" as const,
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:10:00.000Z",
+        projectId: "demo-app",
+        annotationCount: 2,
+      }, {
+        id: "sess-closed",
+        url: "http://localhost:5173/checkout",
+        status: "closed" as const,
+        createdAt: "2026-03-09T00:00:00.000Z",
+        updatedAt: "2026-03-09T00:05:00.000Z",
+        projectId: "demo-app",
+        annotationCount: 1,
+      }],
       dispatch: undefined,
     }
     const listeners = new Set<(event: any) => void>()
@@ -157,6 +174,10 @@ function makeProvides(options?: {
       init: vi.fn().mockResolvedValue(undefined),
       setAutoMode: vi.fn(),
       listAgents: vi.fn().mockImplementation(async () => state),
+      listSessions: vi.fn().mockImplementation(async () => ({
+        projectId: state.projectId,
+        sessions: state.sessions,
+      })),
       selectAgent: vi.fn().mockImplementation(async (agentId: string) => {
         state.agents = state.agents.map((agent) => ({
           ...agent,
@@ -177,6 +198,16 @@ function makeProvides(options?: {
           updatedAt: new Date().toISOString(),
         }
         return state
+      }),
+      closeSession: vi.fn().mockImplementation(async (sessionId: string) => {
+        state.sessions = state.sessions.map((session) =>
+          session.id === sessionId
+            ? { ...session, status: "closed", updatedAt: new Date().toISOString() }
+            : session)
+        return {
+          projectId: state.projectId,
+          sessions: state.sessions,
+        }
       }),
       enqueueAutoDispatch: vi.fn(),
       cancelDispatch: vi.fn().mockImplementation(async () => {
@@ -236,6 +267,11 @@ function mountToolbar(options?: Parameters<typeof makeProvides>[0]) {
 
 async function expandToolbar(wrapper: { find(selector: string): { trigger(event: string): Promise<unknown> } }) {
   await wrapper.find(".toolbar-container").trigger("click")
+}
+
+async function flushUi() {
+  await Promise.resolve()
+  await nextTick()
 }
 
 describe("Toolbar", () => {
@@ -354,6 +390,7 @@ describe("Toolbar", () => {
     )
     expect(automationsButton).toBeDefined()
     await automationsButton!.trigger("click")
+    await flushUi()
 
     expect(wrapper.findAll(".back-btn")[1]!.text()).toContain("Agent workspace")
     expect(wrapper.find(".mcp-status").text()).toContain("Connected")
@@ -371,6 +408,7 @@ describe("Toolbar", () => {
     )
     expect(automationsButton).toBeDefined()
     await automationsButton!.trigger("click")
+    await flushUi()
 
     expect(wrapper.text()).toContain("Companion status")
     expect(wrapper.text()).toContain("Available on this machine")
@@ -383,6 +421,24 @@ describe("Toolbar", () => {
     expect(settings.agentAutoSendEnabled).toBe(true)
   })
 
+  it("shows the toolbar send icon next to copy when an active agent is available", async () => {
+    const { wrapper, bridge } = mountToolbar({
+      sync: true,
+      annotations: [makeAnnotation()],
+    })
+
+    await flushUi()
+    await expandToolbar(wrapper)
+
+    const sendButton = wrapper.find('button[aria-label="Send pending annotations to the selected agent"]')
+    expect(sendButton.exists()).toBe(true)
+    expect(wrapper.find(".toolbar").classes()).toContain("has-agent-send")
+
+    await sendButton.trigger("click")
+
+    expect(bridge.agent?.dispatch).toHaveBeenCalledWith("manual", "manual.send")
+  })
+
   it("manually dispatches pending work to the active agent", async () => {
     const { wrapper, bridge } = mountToolbar({ sync: true })
 
@@ -393,6 +449,7 @@ describe("Toolbar", () => {
     )
     expect(automationsButton).toBeDefined()
     await automationsButton!.trigger("click")
+    await flushUi()
 
     const sendButton = wrapper.findAll("button").find(
       (button) => button.text().includes("Send now"),
@@ -404,13 +461,46 @@ describe("Toolbar", () => {
     expect(wrapper.text()).toContain("Turn completed")
   })
 
+  it("sends work directly even when the active agent is not pre-connected", async () => {
+    const { wrapper, bridge } = mountToolbar({
+      sync: true,
+      agents: [{
+        id: "codex",
+        label: "Codex",
+        kind: "codex",
+        available: true,
+        status: "available",
+        isDefault: true,
+        isActive: true,
+      }],
+    })
+
+    await expandToolbar(wrapper)
+    await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
+    const automationsButton = wrapper.findAll(".nav-btn").find(
+      (button) => button.text().includes("Agent workspace"),
+    )
+    expect(automationsButton).toBeDefined()
+    await automationsButton!.trigger("click")
+    await flushUi()
+
+    const sendButton = wrapper.findAll("button").find(
+      (button) => button.text().includes("Send now"),
+    )
+    expect(sendButton).toBeDefined()
+    await sendButton!.trigger("click")
+
+    expect(bridge.agent?.dispatch).toHaveBeenCalledWith("manual", "manual.send")
+    expect(bridge.agent?.connect).not.toHaveBeenCalled()
+  })
+
   it("sizes the settings panel to the active page and caps tall pages", async () => {
     const { wrapper } = mountToolbar({ sync: true })
 
     await expandToolbar(wrapper)
     await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
 
-    const [mainPage, copyPage, automationsPage] = wrapper.findAll(".settings-page")
+    const [mainPage, copyPage, automationsPage, sessionsPage] = wrapper.findAll(".settings-page")
 
     Object.defineProperty(mainPage.element, "scrollHeight", {
       configurable: true,
@@ -424,6 +514,10 @@ describe("Toolbar", () => {
       configurable: true,
       value: 960,
     })
+    Object.defineProperty(sessionsPage.element, "scrollHeight", {
+      configurable: true,
+      value: 420,
+    })
 
     window.dispatchEvent(new Event("resize"))
     await nextTick()
@@ -435,9 +529,42 @@ describe("Toolbar", () => {
     )
     expect(automationsButton).toBeDefined()
     await automationsButton!.trigger("click")
-    await nextTick()
+    await flushUi()
 
     expect(wrapper.find(".settings-pages").attributes("style")).toContain("height: 520px;")
+  })
+
+  it("shows agent sessions and can close an active session", async () => {
+    const { wrapper, bridge } = mountToolbar({ sync: true })
+
+    await expandToolbar(wrapper)
+    await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
+    const automationsButton = wrapper.findAll(".nav-btn").find(
+      (button) => button.text().includes("Agent workspace"),
+    )
+    expect(automationsButton).toBeDefined()
+    await automationsButton!.trigger("click")
+    await flushUi()
+
+    const sessionsButton = wrapper.findAll(".nav-btn").find(
+      (button) => button.text().includes("Agent sessions"),
+    )
+    expect(sessionsButton).toBeDefined()
+    await sessionsButton!.trigger("click")
+    await flushUi()
+
+    expect(wrapper.text()).toContain("localhost:5173")
+    expect(wrapper.text()).toContain("1 active / 2 total")
+
+    const terminateButton = wrapper.findAll("button").find(
+      (button) => button.text().includes("Terminate"),
+    )
+    expect(terminateButton).toBeDefined()
+    await terminateButton!.trigger("click")
+    await flushUi()
+
+    expect(bridge.agent?.closeSession).toHaveBeenCalledWith("sess-active")
+    expect(wrapper.text()).toContain("Closed")
   })
 
   it("copies endpoint values from the MCP guide cards", async () => {
@@ -456,6 +583,7 @@ describe("Toolbar", () => {
     )
     expect(automationsButton).toBeDefined()
     await automationsButton!.trigger("click")
+    await flushUi()
     await wrapper.find('button[aria-label="Copy MCP /mcp endpoint"]').trigger("click")
     await nextTick()
 

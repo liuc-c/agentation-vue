@@ -212,4 +212,45 @@ describe("AnnotationPopover", () => {
     expect(wrapper.find(".thread-title").text()).toContain("Thread")
     expect(wrapper.text()).toContain("Updated the CTA padding and alignment.")
   })
+
+  it("renders processing status for claimed annotations", () => {
+    const { store, selection, overlay, settings, i18n } = makeProvides({
+      popoverVisible: true,
+      editingAnnotation: {
+        id: "a1",
+        schemaVersion: 1,
+        timestamp: new Date().toISOString(),
+        url: "http://localhost/",
+        elementSelector: "button.primary",
+        comment: "Original feedback",
+        source: {
+          framework: "vue",
+          componentName: "App",
+          file: "src/App.vue",
+          line: 10,
+          resolver: "test",
+        },
+        status: "processing",
+        processingByAgentId: "codex",
+        processingByRunId: "run-1",
+        processingStartedAt: "2026-03-09T01:02:03.000Z",
+        processingExpiresAt: "2026-03-09T01:12:03.000Z",
+      },
+    })
+
+    const wrapper = mount(AnnotationPopover, {
+      global: {
+        provide: {
+          [ANNOTATIONS_STORE_KEY as symbol]: store,
+          [SELECTION_KEY as symbol]: selection,
+          [OVERLAY_KEY as symbol]: overlay,
+          [SETTINGS_KEY as symbol]: settings,
+          [I18N_KEY as symbol]: i18n,
+        },
+      },
+    })
+
+    expect(wrapper.find(".status-pill").text()).toContain("Processing")
+    expect(wrapper.find(".status-pill").attributes("data-status")).toBe("processing")
+  })
 })

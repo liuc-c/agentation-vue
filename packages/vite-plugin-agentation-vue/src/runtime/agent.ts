@@ -1,12 +1,37 @@
 import type {
+  AgentSessionSummary,
   RuntimeAgentBridge,
   RuntimeAgentEvent,
+  RuntimeAgentSessionsState,
   RuntimeAgentState,
 } from "@liuovo/agentation-vue-ui"
 
 interface AgentResponse extends RuntimeAgentState {
   projectId?: string
 }
+
+interface AgentSessionsResponse extends RuntimeAgentSessionsState {
+  projectId?: string
+}
+
+function normalizeSessionsResponse(
+  state: AgentSessionsResponse | AgentSessionSummary[],
+  projectId?: string,
+): RuntimeAgentSessionsState {
+  if (Array.isArray(state)) {
+    return {
+      projectId,
+      sessions: state,
+    }
+  }
+
+  return {
+    projectId: state.projectId ?? projectId,
+    sessions: state.sessions ?? [],
+  }
+}
+
+const PROJECT_AGENT_STORAGE_KEY = "agentation-vue-agent-selection-by-project"
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "")
@@ -27,6 +52,49 @@ async function parseJson<T>(response: Response): Promise<T> {
   }
 
   return response.json() as Promise<T>
+}
+
+function loadStoredAgentId(projectId?: string): string | undefined {
+  if (!projectId || typeof window === "undefined") return undefined
+
+  try {
+    const raw = window.localStorage.getItem(PROJECT_AGENT_STORAGE_KEY)
+    if (!raw) return undefined
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const value = parsed[projectId]
+    return typeof value === "string" && value.trim()
+      ? value.trim()
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function saveStoredAgentId(projectId: string | undefined, agentId: string): void {
+  if (!projectId || typeof window === "undefined") return
+
+  try {
+    const raw = window.localStorage.getItem(PROJECT_AGENT_STORAGE_KEY)
+    const current = raw ? JSON.parse(raw) as Record<string, unknown> : {}
+    current[projectId] = agentId
+    window.localStorage.setItem(PROJECT_AGENT_STORAGE_KEY, JSON.stringify(current))
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function clearStoredAgentId(projectId?: string): void {
+  if (!projectId || typeof window === "undefined") return
+
+  try {
+    const raw = window.localStorage.getItem(PROJECT_AGENT_STORAGE_KEY)
+    if (!raw) return
+    const current = JSON.parse(raw) as Record<string, unknown>
+    delete current[projectId]
+    window.localStorage.setItem(PROJECT_AGENT_STORAGE_KEY, JSON.stringify(current))
+  } catch {
+    // Ignore storage failures.
+  }
 }
 
 export function createRuntimeAgentBridge(input: {
@@ -77,6 +145,19 @@ export function createRuntimeAgentBridge(input: {
     return state
   }
 
+  async function refreshSessions(): Promise<RuntimeAgentSessionsState> {
+    if (!projectId) {
+      return {
+        projectId,
+        sessions: [],
+      }
+    }
+
+    const response = await fetch(`${endpoint}/v2/sessions?projectFilter=${encodeURIComponent(projectId)}`)
+    const state = await parseJson<AgentSessionsResponse | AgentSessionSummary[]>(response)
+    return normalizeSessionsResponse(state, projectId)
+  }
+
   async function post<T>(pathname: string, body: Record<string, unknown>): Promise<T> {
     const response = await fetch(`${endpoint}${pathname}`, {
       method: "POST",
@@ -123,11 +204,20 @@ export function createRuntimeAgentBridge(input: {
       autoMode = Boolean(initialAutoMode)
       ensureEventSource()
 
-      if (selectedAgentId && projectId) {
+      const storedAgentId = loadStoredAgentId(projectId)
+      const candidateAgentIds = [...new Set([
+        storedAgentId,
+        selectedAgentId,
+      ].filter((value): value is string => Boolean(value?.trim())))]
+
+      for (const agentId of candidateAgentIds) {
         try {
-          await this.selectAgent(selectedAgentId)
+          await this.selectAgent(agentId)
+          break
         } catch {
-          // ignore persisted stale values
+          if (agentId === storedAgentId) {
+            clearStoredAgentId(projectId)
+          }
         }
       }
 
@@ -145,12 +235,17 @@ export function createRuntimeAgentBridge(input: {
       return refresh()
     },
 
+    listSessions() {
+      return refreshSessions()
+    },
+
     async selectAgent(agentId) {
       if (!projectId) return { projectId, agents: [] }
       const state = await post<AgentResponse>("/v2/agents/select", {
         projectId,
         agentId,
       })
+      saveStoredAgentId(projectId, agentId)
       emit({
         type: "list",
         projectId,
@@ -209,6 +304,18 @@ export function createRuntimeAgentBridge(input: {
         timestamp: new Date().toISOString(),
       })
       return state
+    },
+
+    async closeSession(sessionId) {
+      if (!projectId) return { projectId, sessions: [] }
+      const response = await fetch(`${endpoint}/v2/sessions/${encodeURIComponent(sessionId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "closed" }),
+      })
+      await parseJson<Record<string, unknown>>(response)
+
+      return refreshSessions()
     },
 
     enqueueAutoDispatch(trigger, sessionId) {

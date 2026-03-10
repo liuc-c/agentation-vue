@@ -8,11 +8,13 @@ import { useToolbarDrag } from "../composables/useToolbarDrag.js"
 import { SUPPORTED_LOCALES, LOCALE_LABELS } from "../i18n/index.js"
 import { injectStrict } from "../utils.js"
 import type { ExportActions } from "../composables/useExport.js"
-import type { AgentDispatchState, AgentSummary } from "../types.js"
+import type { AgentDispatchState, AgentSessionSummary, AgentSummary } from "../types.js"
 import {
+  IconCheckCircle,
   IconChevronLeft,
   IconChevronRight,
   IconCheckSmallAnimated,
+  IconClockList,
   IconConnectedNodes,
   IconCopyAnimated,
   IconEye,
@@ -24,6 +26,7 @@ import {
   IconMarkdown,
   IconMoon,
   IconPause,
+  IconPaperPlane,
   IconPlay,
   IconSun,
   IconTrashAlt,
@@ -33,7 +36,7 @@ import AgentProviderIcon from "./AgentProviderIcon.vue"
 import AgTooltip from "./AgTooltip.vue"
 
 const OUTPUT_DETAIL_KEYS = ["compact", "standard", "detailed", "forensic"] as const
-const SETTINGS_PAGE_KEYS = ["main", "copy", "automations"] as const
+const SETTINGS_PAGE_KEYS = ["main", "copy", "automations", "sessions"] as const
 const HELP_ICON_SIZE = 16
 const SETTINGS_PANEL_MAX_HEIGHT = 520
 
@@ -55,6 +58,7 @@ const toolbarRef = ref<HTMLElement | null>(null)
 const mainSettingsPageRef = ref<HTMLElement | null>(null)
 const copySettingsPageRef = ref<HTMLElement | null>(null)
 const automationsSettingsPageRef = ref<HTMLElement | null>(null)
+const sessionsSettingsPageRef = ref<HTMLElement | null>(null)
 const expanded = ref(false)
 const settingsOpen = ref(false)
 const settingsPage = ref<SettingsPage>("main")
@@ -92,8 +96,11 @@ const syncInfo = computed(() => bridge.sync?.info)
 const companionEndpoint = computed(() => syncInfo.value?.endpoint ?? "http://localhost:4748")
 const mcpHttpEndpoint = computed(() => syncInfo.value?.mcpHttpUrl ?? "http://localhost:4748/mcp")
 const agentSummaries = ref<AgentSummary[]>([])
+const agentSessions = ref<AgentSessionSummary[]>([])
 const agentDispatchState = ref<AgentDispatchState | null>(null)
 const agentActionPending = ref<"select" | "connect" | "disconnect" | "dispatch" | "cancel" | null>(null)
+const sessionActionPending = ref<string | null>(null)
+const expandedSessionId = ref<string | null>(null)
 const agentBridgeAvailable = computed(() => Boolean(bridge.agent))
 const activeAgent = computed(() => agentSummaries.value.find((agent) => agent.isActive) ?? null)
 const sortedAgentSummaries = computed(() =>
@@ -103,9 +110,24 @@ const sortedAgentSummaries = computed(() =>
     if (left.isDefault !== right.isDefault) return left.isDefault ? -1 : 1
     return left.label.localeCompare(right.label)
   }))
+const sortedAgentSessions = computed(() =>
+  [...agentSessions.value].sort((left, right) => {
+    if ((left.status === "closed") !== (right.status === "closed")) {
+      return left.status === "closed" ? 1 : -1
+    }
+
+    const rightTime = Date.parse(right.updatedAt ?? right.createdAt)
+    const leftTime = Date.parse(left.updatedAt ?? left.createdAt)
+    return rightTime - leftTime
+  }))
 const hasAvailableAgent = computed(() => agentSummaries.value.some((agent) => agent.available))
 const dispatchInFlight = computed(() => agentDispatchState.value?.state === "sending")
 const latestAgentActivity = computed(() => agentDispatchState.value?.message ?? activeAgent.value?.lastError ?? "")
+const activeSessionCount = computed(() => agentSessions.value.filter((session) => session.status !== "closed").length)
+const showToolbarSendButton = computed(() => Boolean(activeAgent.value && bridge.agent))
+const canSendToAgent = computed(() =>
+  Boolean(activeAgent.value?.available)
+  && agentActionPending.value === null)
 const connectionCards = computed(() => [
   { key: "companion", label: messages.value.settings.companionEndpointLabel, value: companionEndpoint.value },
   { key: "mcp-http", label: messages.value.settings.mcpEndpointLabel, value: mcpHttpEndpoint.value },
@@ -126,11 +148,11 @@ const primaryAgentGuidance = computed(() => {
     return activeAgent.value.installHint ?? messages.value.settings.installAgentHint
   }
 
-  if (!activeAgentConnected.value) {
-    return messages.value.settings.connectAgentToStart
-  }
-
-  return messages.value.settings.sendPendingToStart
+  return dispatchInFlight.value
+    ? messages.value.settings.cancelSend
+    : activeAgentConnected.value
+      ? messages.value.settings.sendPendingToStart
+      : messages.value.settings.connectAgentToStart
 })
 const primaryAgentActionLabel = computed(() => {
   if (!activeAgent.value) {
@@ -139,10 +161,6 @@ const primaryAgentActionLabel = computed(() => {
 
   if (!activeAgent.value.available) {
     return activeAgent.value.homepage ? messages.value.settings.openHomepage : messages.value.settings.installAgent
-  }
-
-  if (!activeAgentConnected.value) {
-    return messages.value.settings.connectAgent
   }
 
   return messages.value.settings.manualSend
@@ -207,7 +225,7 @@ function onOutsideClick(e: PointerEvent): void {
 }
 
 function setToolbarRef(element: Element | ComponentPublicInstance | null): void {
-  const el = element instanceof HTMLElement ? element : null
+  const el = typeof HTMLElement !== "undefined" && element instanceof HTMLElement ? element : null
   toolbarRef.value = el
   drag.bindToolbarRef(el)
 }
@@ -251,6 +269,7 @@ function toggleMarkers(): void {
 function closeSettingsPanel(): void {
   settingsOpen.value = false
   settingsPage.value = "main"
+  expandedSessionId.value = null
 }
 
 function toggleSettingsPanel(): void {
@@ -266,6 +285,13 @@ function openAutomationsPanel(): void {
   settingsOpen.value = true
   settingsPage.value = "automations"
   void refreshAgents()
+  void refreshAgentSessions()
+}
+
+function openAgentSessionsPanel(): void {
+  settingsOpen.value = true
+  settingsPage.value = "sessions"
+  void refreshAgentSessions()
 }
 
 function openCopySettingsPanel(): void {
@@ -275,6 +301,10 @@ function openCopySettingsPanel(): void {
 
 function showMainSettings(): void {
   settingsPage.value = "main"
+}
+
+function showAutomationsSettings(): void {
+  settingsPage.value = "automations"
 }
 
 function openAgentHomepage(agent?: AgentSummary | null): void {
@@ -336,6 +366,21 @@ async function refreshAgents(): Promise<void> {
   }
 }
 
+async function refreshAgentSessions(): Promise<void> {
+  if (!bridge.agent) return
+
+  try {
+    const state = await bridge.agent.listSessions()
+    agentSessions.value = state.sessions
+  } catch (error) {
+    bridge.notify?.({
+      kind: "warning",
+      duration: 2800,
+      message: error instanceof Error ? error.message : "Failed to refresh agent sessions",
+    })
+  }
+}
+
 async function runAgentAction(
   action: NonNullable<typeof agentActionPending.value>,
   fn: () => Promise<void>,
@@ -385,6 +430,24 @@ async function sendToAgent(): Promise<void> {
   })
 }
 
+async function closeAgentSession(sessionId: string): Promise<void> {
+  if (!bridge.agent || sessionActionPending.value) return
+  sessionActionPending.value = sessionId
+
+  try {
+    const state = await bridge.agent.closeSession(sessionId)
+    agentSessions.value = state.sessions
+  } catch (error) {
+    bridge.notify?.({
+      kind: "warning",
+      duration: 2800,
+      message: error instanceof Error ? error.message : "Failed to close agent session",
+    })
+  } finally {
+    sessionActionPending.value = null
+  }
+}
+
 async function cancelAgentDispatch(): Promise<void> {
   if (!bridge.agent) return
   await runAgentAction("cancel", async () => {
@@ -400,11 +463,6 @@ async function runPrimaryAgentAction(): Promise<void> {
     return
   }
 
-  if (!activeAgentConnected.value) {
-    await connectAgent(activeAgent.value.id)
-    return
-  }
-
   await sendToAgent()
 }
 
@@ -412,6 +470,51 @@ function getAgentAvailabilityLabel(agent: AgentSummary): string {
   return agent.available
     ? messages.value.settings.availableOnMachine
     : messages.value.settings.notInstalledOnMachine
+}
+
+function getSessionStatusLabel(status: AgentSessionSummary["status"]): string {
+  switch (status) {
+    case "approved":
+      return messages.value.settings.sessionStatusApproved
+    case "closed":
+      return messages.value.settings.sessionStatusClosed
+    default:
+      return messages.value.settings.sessionStatusActive
+  }
+}
+
+function toggleSessionDetails(sessionId: string): void {
+  expandedSessionId.value = expandedSessionId.value === sessionId ? null : sessionId
+  void nextTick().then(() => {
+    syncSettingsPanelHeight()
+  })
+}
+
+function getSessionDisplayTitle(session: AgentSessionSummary): string {
+  try {
+    const url = new URL(session.url)
+    return url.pathname && url.pathname !== "/"
+      ? `${url.host}${url.pathname}`
+      : url.host
+  } catch {
+    return session.id
+  }
+}
+
+function formatSessionTimestamp(value?: string): string {
+  if (!value) return ""
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date)
 }
 
 function toggleCopyExcludedField(field: typeof COPY_EXCLUDE_FIELDS[number]): void {
@@ -430,6 +533,8 @@ watch(
     () => agentSummaries.value.length,
     () => agentDispatchState.value?.state,
     latestAgentActivity,
+    () => agentSessions.value.length,
+    expandedSessionId,
   ],
   async ([isOpen]) => {
     if (!isOpen) {
@@ -456,6 +561,7 @@ onMounted(() => {
   }) ?? null
 
   void refreshAgents()
+  void refreshAgentSessions()
 })
 
 function clearAll(): void {
@@ -533,6 +639,8 @@ function syncSettingsPanelHeight(): void {
     ? copySettingsPageRef.value
     : settingsPage.value === "automations"
       ? automationsSettingsPageRef.value
+      : settingsPage.value === "sessions"
+        ? sessionsSettingsPageRef.value
       : mainSettingsPageRef.value
 
   if (!activePage) return
@@ -547,7 +655,8 @@ function getMaxSettingsPanelHeight(): number {
 </script>
 
 <template>
-  <div :ref="setToolbarRef" class="toolbar" :class="{ dragging: drag.isDragging.value }"
+  <div :ref="setToolbarRef" class="toolbar"
+    :class="{ dragging: drag.isDragging.value, 'has-agent-send': showToolbarSendButton }"
     :style="drag.toolbarStyle.value" data-feedback-toolbar>
     <div class="toolbar-container" :class="{
       collapsed: !expanded,
@@ -590,6 +699,12 @@ function getMaxSettingsPanelHeight(): number {
           :disabled="!hasAnnotations" :data-active="copyFeedbackActive || undefined"
           @click.stop="void exportCurrentFormat()">
           <IconCopyAnimated :size="24" :copied="copyFeedbackActive" />
+        </button>
+
+        <button v-if="showToolbarSendButton" class="control-btn" :class="{ light: isLight }" type="button"
+          :title="messages.toolbar.sendToAgent" :aria-label="messages.toolbar.sendToAgentAria"
+          :disabled="!canSendToAgent" :data-active="dispatchInFlight || undefined" @click.stop="void sendToAgent()">
+          <IconPaperPlane :size="18" />
         </button>
 
         <button class="control-btn" :class="{ light: isLight }" type="button" :title="messages.toolbar.clearAll"
@@ -873,8 +988,14 @@ function getMaxSettingsPanelHeight(): number {
                       :disabled="primaryAgentActionDisabled" @click="void runPrimaryAgentAction()">
                       {{ primaryAgentActionLabel }}
                     </button>
+                    <button v-if="activeAgentConnected && activeAgent && !dispatchInFlight" class="mini-btn secondary-action"
+                      :class="{ light: isLight }" type="button"
+                      :disabled="agentActionPending !== null && agentActionPending !== 'disconnect'"
+                      @click="void disconnectAgent(activeAgent.id)">
+                      {{ messages.settings.disconnectAgent }}
+                    </button>
                     <button v-if="dispatchInFlight" class="mini-btn secondary-action" :class="{ light: isLight }"
-                      type="button" :disabled="agentActionPending !== null || !agentBridgeAvailable"
+                      type="button" :disabled="(agentActionPending !== null && agentActionPending !== 'dispatch') || !agentBridgeAvailable"
                       @click="void cancelAgentDispatch()">
                       {{ messages.settings.cancelSend }}
                     </button>
@@ -905,59 +1026,60 @@ function getMaxSettingsPanelHeight(): number {
               </div>
 
               <div class="settings-section">
+                <button class="nav-btn" :class="{ light: isLight }" type="button" @click="openAgentSessionsPanel">
+                  <span class="nav-btn-left">
+                    <IconClockList :size="18" />
+                    <span>{{ messages.settings.agentSessions }}</span>
+                  </span>
+                  <span class="nav-btn-right">
+                    <span class="agent-inline-status" :class="{ light: isLight }">
+                      {{ messages.settings.agentSessionsCount(activeSessionCount, agentSessions.length) }}
+                    </span>
+                    <IconChevronRight :size="16" />
+                  </span>
+                </button>
+                <p class="settings-description" :class="{ light: isLight }">
+                  {{ messages.settings.agentSessionsDescription }}
+                </p>
+              </div>
+
+              <div class="settings-section">
                 <div class="settings-row">
                   <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentSelection }}</span>
                 </div>
 
-                <div v-if="agentBridgeAvailable && sortedAgentSummaries.length > 0" class="agent-list">
-                  <div v-for="agent in sortedAgentSummaries" :key="agent.id" class="agent-card"
+                <div v-if="agentBridgeAvailable && sortedAgentSummaries.length > 0" class="agent-list compact">
+                  <div v-for="agent in sortedAgentSummaries" :key="agent.id" class="agent-card compact"
                     :class="{ light: isLight, active: agent.isActive }">
-                    <div class="agent-card-main">
-                      <div class="agent-card-leading">
-                        <AgentProviderIcon :icon="agent.icon" :label="agent.label" :light="isLight" />
-                        <div class="agent-card-copy">
-                          <div class="agent-card-title-row">
-                            <span class="guide-card-title">{{ agent.label }}</span>
-                            <span class="agent-pill" :class="[agent.status, { light: isLight }]">
-                              {{ getAgentStatusLabel(agent.status) }}
-                            </span>
-                          </div>
-                          <div class="agent-card-meta" :class="{ light: isLight }">
-                            <span>{{ getAgentAvailabilityLabel(agent) }}</span>
-                            <span v-if="agent.isActive">{{ messages.settings.activeAgent }}</span>
-                          </div>
+                    <div class="agent-card-leading compact">
+                      <AgentProviderIcon :icon="agent.icon" :label="agent.label" :light="isLight" />
+                      <div class="agent-card-copy">
+                        <div class="agent-card-title-row compact">
+                          <span class="guide-card-title">{{ agent.label }}</span>
+                          <span class="agent-pill" :class="[agent.status, { light: isLight }]">
+                            {{ getAgentStatusLabel(agent.status) }}
+                          </span>
+                        </div>
+                        <div class="agent-card-meta" :class="{ light: isLight }">
+                          <span>{{ getAgentAvailabilityLabel(agent) }}</span>
+                          <span v-if="agent.lastError">{{ agent.lastError }}</span>
+                          <span v-else-if="!agent.available && agent.installHint">{{ agent.installHint }}</span>
                         </div>
                       </div>
-
-                      <p v-if="agent.description" class="settings-description" :class="{ light: isLight }">
-                        {{ agent.description }}
-                      </p>
-                      <p v-else-if="!agent.available && agent.installHint" class="settings-description"
-                        :class="{ light: isLight }">
-                        {{ agent.installHint }}
-                      </p>
-                      <p v-else-if="agent.lastError" class="settings-description" :class="{ light: isLight }">
-                        {{ agent.lastError }}
-                      </p>
                     </div>
 
-                    <div class="agent-card-actions">
-                      <button class="mini-btn" :class="{ light: isLight, active: agent.isActive }" type="button"
-                        :disabled="!agent.available || agentActionPending !== null" @click="void selectAgent(agent.id)">
-                        {{ agent.isActive ? messages.settings.activeAgent : messages.settings.useAgent }}
+                    <div class="agent-card-actions compact">
+                      <button class="icon-action-btn" :class="{ light: isLight, active: agent.isActive }" type="button"
+                        :title="agent.isActive ? messages.settings.selectedAgentAria(agent.label) : messages.settings.useAgentAria(agent.label)"
+                        :aria-label="agent.isActive ? messages.settings.selectedAgentAria(agent.label) : messages.settings.useAgentAria(agent.label)"
+                        :disabled="!agent.available || agentActionPending !== null || agent.isActive"
+                        @click="void selectAgent(agent.id)">
+                        <IconCheckCircle v-if="agent.isActive" :size="16" />
+                        <IconChevronRight v-else :size="16" />
                       </button>
                       <button v-if="agent.homepage" class="mini-btn" :class="{ light: isLight }" type="button"
                         :disabled="agentActionPending !== null" @click="openAgentHomepage(agent)">
                         {{ messages.settings.openHomepage }}
-                      </button>
-                      <button v-if="agent.isActive && (agent.status === 'ready' || agent.status === 'busy' || agent.status === 'error')"
-                        class="mini-btn" :class="{ light: isLight }" type="button"
-                        :disabled="agentActionPending !== null" @click="void disconnectAgent(agent.id)">
-                        {{ messages.settings.disconnectAgent }}
-                      </button>
-                      <button v-else class="mini-btn" :class="{ light: isLight }" type="button"
-                        :disabled="!agent.available || agentActionPending !== null" @click="void connectAgent(agent.id)">
-                        {{ messages.settings.connectAgent }}
                       </button>
                     </div>
                   </div>
@@ -994,6 +1116,86 @@ function getMaxSettingsPanelHeight(): number {
                 </div>
               </div>
 
+            </div>
+
+            <div ref="sessionsSettingsPageRef" class="settings-page">
+              <div class="settings-header automations-header" :class="{ light: isLight }">
+                <button class="back-btn" :class="{ light: isLight }" type="button" @click="showAutomationsSettings">
+                  <IconChevronLeft :size="16" />
+                  <span>{{ messages.settings.agentSessions }}</span>
+                </button>
+              </div>
+
+              <div class="settings-section">
+                <div class="settings-row">
+                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentSessions }}</span>
+                  <button class="mini-btn" :class="{ light: isLight }" type="button"
+                    :disabled="sessionActionPending !== null" @click="void refreshAgentSessions()">
+                    {{ messages.settings.refreshSessions }}
+                  </button>
+                </div>
+                <p class="settings-description" :class="{ light: isLight }">
+                  {{ messages.settings.agentSessionsDescription }}
+                </p>
+              </div>
+
+              <div class="settings-section">
+                <div v-if="sortedAgentSessions.length > 0" class="session-list">
+                  <div v-for="session in sortedAgentSessions" :key="session.id" class="session-card"
+                    :class="{ light: isLight, expanded: expandedSessionId === session.id }">
+                    <div class="session-card-main">
+                      <div class="session-card-title-row">
+                        <strong class="guide-card-title">{{ getSessionDisplayTitle(session) }}</strong>
+                        <span class="agent-pill" :class="[session.status, { light: isLight }]">
+                          {{ getSessionStatusLabel(session.status) }}
+                        </span>
+                      </div>
+                      <div class="session-card-meta" :class="{ light: isLight }">
+                        <span>{{ formatSessionTimestamp(session.updatedAt ?? session.createdAt) }}</span>
+                        <span>{{ messages.settings.sessionAnnotationCount(session.annotationCount) }}</span>
+                      </div>
+                    </div>
+
+                    <div class="session-card-actions">
+                      <button class="mini-btn" :class="{ light: isLight }" type="button"
+                        :disabled="sessionActionPending !== null" @click="toggleSessionDetails(session.id)">
+                        {{ expandedSessionId === session.id ? messages.settings.hideSession : messages.settings.viewSession }}
+                      </button>
+                      <button v-if="session.status !== 'closed'" class="mini-btn" :class="{ light: isLight }"
+                        type="button" :disabled="sessionActionPending !== null"
+                        @click="void closeAgentSession(session.id)">
+                        {{ messages.settings.closeSession }}
+                      </button>
+                    </div>
+
+                    <div v-if="expandedSessionId === session.id" class="session-card-details" :class="{ light: isLight }">
+                      <div class="session-detail-row">
+                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionIdLabel }}</span>
+                        <code>{{ session.id }}</code>
+                      </div>
+                      <div class="session-detail-row">
+                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionAnnotationsLabel }}</span>
+                        <span>{{ messages.settings.sessionAnnotationCount(session.annotationCount) }}</span>
+                      </div>
+                      <div class="session-detail-row">
+                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionCreatedLabel }}</span>
+                        <span>{{ formatSessionTimestamp(session.createdAt) }}</span>
+                      </div>
+                      <div class="session-detail-row" v-if="session.updatedAt">
+                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionUpdatedLabel }}</span>
+                        <span>{{ formatSessionTimestamp(session.updatedAt) }}</span>
+                      </div>
+                      <div class="session-detail-stack">
+                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionUrlLabel }}</span>
+                        <pre class="guide-code session-url" :class="{ light: isLight }">{{ session.url }}</pre>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <p v-else class="settings-description" :class="{ light: isLight }">
+                  {{ messages.settings.noAgentSessions }}
+                </p>
+              </div>
             </div>
           </div>
         </div>
@@ -1067,6 +1269,10 @@ function getMaxSettingsPanelHeight(): number {
   z-index: 100000;
   pointer-events: none;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.toolbar.has-agent-send {
+  --ag-toolbar-expanded-width: 320px;
 }
 
 .toolbar.dragging {
@@ -2189,6 +2395,10 @@ function getMaxSettingsPanelHeight(): number {
   margin-top: 10px;
 }
 
+.agent-list.compact {
+  gap: 8px;
+}
+
 .agent-card {
   display: grid;
   gap: 10px;
@@ -2213,6 +2423,12 @@ function getMaxSettingsPanelHeight(): number {
   background: rgba(15, 23, 42, 0.035);
 }
 
+.agent-card.compact {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
 .agent-card-main {
   display: grid;
   gap: 8px;
@@ -2225,9 +2441,14 @@ function getMaxSettingsPanelHeight(): number {
   align-items: start;
 }
 
+.agent-card-leading.compact {
+  align-items: center;
+}
+
 .agent-card-copy {
   display: grid;
   gap: 4px;
+  min-width: 0;
 }
 
 .agent-card-title-row {
@@ -2236,11 +2457,17 @@ function getMaxSettingsPanelHeight(): number {
   gap: 8px;
 }
 
+.agent-card-title-row.compact {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
 .agent-card-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   font-size: 11px;
+  line-height: 1.45;
   color: rgba(255, 255, 255, 0.46);
 }
 
@@ -2252,6 +2479,11 @@ function getMaxSettingsPanelHeight(): number {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.agent-card-actions.compact {
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .agent-pill,
@@ -2288,6 +2520,16 @@ function getMaxSettingsPanelHeight(): number {
 .agent-pill.busy {
   border-color: rgba(245, 158, 11, 0.24);
   color: #f59e0b;
+}
+
+.agent-pill.approved {
+  border-color: rgba(96, 165, 250, 0.24);
+  color: #60a5fa;
+}
+
+.agent-pill.closed {
+  border-color: rgba(148, 163, 184, 0.24);
+  color: rgba(226, 232, 240, 0.86);
 }
 
 .agent-pill.missing,
@@ -2332,6 +2574,62 @@ function getMaxSettingsPanelHeight(): number {
   color: rgba(15, 23, 42, 0.84);
 }
 
+.icon-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.82);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    transform 0.1s ease;
+}
+
+.icon-action-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.icon-action-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.icon-action-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.icon-action-btn.active {
+  border-color: rgba(34, 197, 94, 0.24);
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+}
+
+.icon-action-btn.light {
+  border-color: rgba(0, 0, 0, 0.12);
+  background: rgba(0, 0, 0, 0.03);
+  color: rgba(0, 0, 0, 0.7);
+}
+
+.icon-action-btn.light:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+  color: rgba(0, 0, 0, 0.88);
+}
+
+.icon-action-btn.light.active {
+  border-color: rgba(34, 197, 94, 0.22);
+  background: rgba(34, 197, 94, 0.1);
+  color: #15803d;
+}
+
 .mini-btn:disabled,
 .nav-btn:disabled {
   opacity: 0.5;
@@ -2341,6 +2639,107 @@ function getMaxSettingsPanelHeight(): number {
 .agent-actions {
   display: grid;
   gap: 8px;
+}
+
+.session-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.session-card {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.session-card.light {
+  border-color: rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.session-card.expanded {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.session-card.expanded.light {
+  border-color: rgba(15, 23, 42, 0.14);
+}
+
+.session-card-main {
+  display: grid;
+  gap: 6px;
+}
+
+.session-card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.46);
+}
+
+.session-card-meta.light {
+  color: rgba(0, 0, 0, 0.42);
+}
+
+.session-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.session-card-details {
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.session-card-details.light {
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+.session-detail-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.settings-panel.light .session-detail-row {
+  color: rgba(15, 23, 42, 0.82);
+}
+
+.session-detail-row code {
+  max-width: 188px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.session-detail-stack {
+  display: grid;
+  gap: 6px;
+}
+
+.session-url {
+  margin-top: 0;
 }
 
 /* --- Get started guide ----------------------------------------------- */

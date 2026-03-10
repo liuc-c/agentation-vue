@@ -231,6 +231,8 @@ function getStatusLabel(status: AnnotationStatus): string {
   switch (status) {
     case "acknowledged":
       return messages.value.workflow.statusAcknowledged
+    case "processing":
+      return messages.value.workflow.statusProcessing
     case "resolved":
       return messages.value.workflow.statusResolved
     case "dismissed":
@@ -240,9 +242,10 @@ function getStatusLabel(status: AnnotationStatus): string {
   }
 }
 
-function getStatusTone(status: AnnotationStatus): "pending" | "acknowledged" | "resolved" | "dismissed" {
+function getStatusTone(status: AnnotationStatus): "pending" | "acknowledged" | "processing" | "resolved" | "dismissed" {
   switch (status) {
     case "acknowledged":
+    case "processing":
     case "resolved":
     case "dismissed":
       return status
@@ -590,6 +593,11 @@ function getAnnotationComputedStyles(annotation: AnnotationV2): Record<string, s
   color: #67e8f9;
 }
 
+.status-pill[data-status="processing"] {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fcd34d;
+}
+
 .status-pill[data-status="resolved"] {
   background: rgba(34, 197, 94, 0.16);
   color: #86efac;
@@ -608,6 +616,11 @@ function getAnnotationComputedStyles(annotation: AnnotationV2): Record<string, s
 .light .status-pill[data-status="acknowledged"] {
   background: rgba(14, 165, 233, 0.1);
   color: #0f766e;
+}
+
+.light .status-pill[data-status="processing"] {
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
 }
 
 .light .status-pill[data-status="resolved"] {

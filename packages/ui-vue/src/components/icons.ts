@@ -324,6 +324,87 @@ export const IconConnectedNodes: FunctionalComponent<IconProps> = (props) => {
   ], props.style)
 }
 
+/** Paper plane icon — send pending work to agent. */
+export const IconPaperPlane: FunctionalComponent<IconProps> = (props) => {
+  const s = props.size ?? 18
+  return svg(s, "0 0 24 24", [
+    h("path", {
+      d: "M20 4L11 13",
+      stroke: "currentColor",
+      "stroke-width": 1.5,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+    }),
+    h("path", {
+      d: "M20 4L14.5 20L11 13L4 9.5L20 4Z",
+      stroke: "currentColor",
+      "stroke-width": 1.5,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+    }),
+  ], props.style)
+}
+
+/** Clock + list icon — session history. */
+export const IconClockList: FunctionalComponent<IconProps> = (props) => {
+  const s = props.size ?? 18
+  return svg(s, "0 0 24 24", [
+    h("path", {
+      d: "M4.75 6.75H13.25",
+      stroke: "currentColor",
+      "stroke-width": 1.5,
+      "stroke-linecap": "round",
+    }),
+    h("path", {
+      d: "M4.75 11.75H10.25",
+      stroke: "currentColor",
+      "stroke-width": 1.5,
+      "stroke-linecap": "round",
+    }),
+    h("path", {
+      d: "M4.75 16.75H9.25",
+      stroke: "currentColor",
+      "stroke-width": 1.5,
+      "stroke-linecap": "round",
+    }),
+    h("circle", {
+      cx: 16.5,
+      cy: 14.5,
+      r: 4.75,
+      stroke: "currentColor",
+      "stroke-width": 1.5,
+    }),
+    h("path", {
+      d: "M16.5 12.25V14.5L18 15.5",
+      stroke: "currentColor",
+      "stroke-width": 1.5,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+    }),
+  ], props.style)
+}
+
+/** Check circle icon — mark selected agent. */
+export const IconCheckCircle: FunctionalComponent<IconProps> = (props) => {
+  const s = props.size ?? 18
+  return svg(s, "0 0 24 24", [
+    h("circle", {
+      cx: 12,
+      cy: 12,
+      r: 8,
+      stroke: "currentColor",
+      "stroke-width": 1.5,
+    }),
+    h("path", {
+      d: "M9 12.25L11 14.25L15 10.25",
+      stroke: "currentColor",
+      "stroke-width": 1.5,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+    }),
+  ], props.style)
+}
+
 /** Large X mark — close/exit icon (filled). */
 export const IconXmarkLarge: FunctionalComponent<IconProps> = (props) => {
   const s = props.size ?? 24

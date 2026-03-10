@@ -26,6 +26,8 @@ export interface Messages {
     copyMarkdownAria: string
     copyJson: string
     copyJsonAria: string
+    sendToAgent: string
+    sendToAgentAria: string
     clearAll: string
     clearAllAria: string
     agentWorkspace: string
@@ -50,6 +52,7 @@ export interface Messages {
   workflow: {
     statusPending: string
     statusAcknowledged: string
+    statusProcessing: string
     statusResolved: string
     statusDismissed: string
     roleAgent: string
@@ -105,12 +108,15 @@ export interface Messages {
     availableAgents: string
     autoSendToAgent: string
     autoSendDescription: string
+    noPendingAnnotations: string
     manualSend: string
     cancelSend: string
     connectAgent: string
     disconnectAgent: string
     activeAgent: string
     useAgent: string
+    useAgentAria: (label: string) => string
+    selectedAgentAria: (label: string) => string
     noAgentsAvailable: string
     agentStatusReady: string
     agentStatusAvailable: string
@@ -119,6 +125,23 @@ export interface Messages {
     agentStatusBusy: string
     agentStatusError: string
     agentLastActivity: string
+    agentSessions: string
+    agentSessionsDescription: string
+    agentSessionsCount: (active: number, total: number) => string
+    refreshSessions: string
+    noAgentSessions: string
+    viewSession: string
+    hideSession: string
+    closeSession: string
+    sessionIdLabel: string
+    sessionUrlLabel: string
+    sessionCreatedLabel: string
+    sessionUpdatedLabel: string
+    sessionAnnotationsLabel: string
+    sessionAnnotationCount: (count: number) => string
+    sessionStatusActive: string
+    sessionStatusApproved: string
+    sessionStatusClosed: string
     outputDetailHelp: string
     componentSourceHelp: string
     blockInteractionsHelp: string
