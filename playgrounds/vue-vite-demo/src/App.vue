@@ -20,7 +20,7 @@ onUnmounted(() => {
   <main class="app">
     <header class="hero">
       <p class="eyebrow">Agentation Vue</p>
-      <h1>Phase 4 — MVP Demo</h1>
+      <h1>Phase 5 — Codex Verified</h1>
       <p class="subtitle">
         Click any element to annotate it. Hover to see the highlight.
         Use the toolbar (bottom-right) to export, open settings, or toggle annotation mode.
