@@ -8,7 +8,11 @@ const DEFAULT_OUTPUT = fileURLToPath(new URL("../src/server/registry/registry-sn
 
 const ICON_OVERRIDES = {
   "claude-acp": "vscode-icons:file-type-claude",
+  cursor: "vscode-icons:file-type-cursorrules",
   gemini: "vscode-icons:file-type-gemini",
+  "github-copilot": "vscode-icons:file-type-copilot",
+  "github-copilot-cli": "vscode-icons:file-type-copilot",
+  junie: "vscode-icons:file-type-jetbrains",
 }
 
 function normalizeString(value) {

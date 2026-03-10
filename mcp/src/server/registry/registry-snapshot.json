@@ -202,6 +202,7 @@
       ],
       "env": [],
       "transport": "stdio",
+      "icon": "vscode-icons:file-type-copilot",
       "description": "GitHub's AI pair programmer",
       "homepage": "https://github.com/github/copilot-language-server-release",
       "installHint": "Runs via npx -y @github/copilot-language-server@1.449.0 --acp."
@@ -218,6 +219,7 @@
       ],
       "env": [],
       "transport": "stdio",
+      "icon": "vscode-icons:file-type-copilot",
       "description": "GitHub's AI pair programmer",
       "homepage": "https://github.com/github/copilot-cli",
       "installHint": "Runs via npx -y @github/copilot@1.0.3 --acp."
@@ -234,6 +236,7 @@
       ],
       "env": [],
       "transport": "stdio",
+      "icon": "vscode-icons:file-type-jetbrains",
       "description": "AI Coding Agent by JetBrains",
       "homepage": "https://github.com/JetBrains/junie",
       "installHint": "Runs via npx -y @jetbrains/junie@888.180.0 --acp=true."

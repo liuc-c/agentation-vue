@@ -5,6 +5,9 @@ describe("DEFAULT_AGENT_REGISTRY_MANIFEST", () => {
   it("ships the generated ACP registry snapshot", () => {
     const claude = DEFAULT_AGENT_REGISTRY_MANIFEST.agents.find((agent) => agent.id === "claude-acp")
     const codex = DEFAULT_AGENT_REGISTRY_MANIFEST.agents.find((agent) => agent.id === "codex-acp")
+    const githubCopilot = DEFAULT_AGENT_REGISTRY_MANIFEST.agents.find((agent) => agent.id === "github-copilot")
+    const githubCopilotCli = DEFAULT_AGENT_REGISTRY_MANIFEST.agents.find((agent) => agent.id === "github-copilot-cli")
+    const junie = DEFAULT_AGENT_REGISTRY_MANIFEST.agents.find((agent) => agent.id === "junie")
 
     expect(DEFAULT_AGENT_REGISTRY_MANIFEST.generatedAt).toBeTruthy()
     expect(DEFAULT_AGENT_REGISTRY_MANIFEST.source).toBeTruthy()
@@ -20,6 +23,9 @@ describe("DEFAULT_AGENT_REGISTRY_MANIFEST", () => {
       kind: "codex",
       command: "npx",
     })
+    expect(githubCopilot?.icon).toBe("vscode-icons:file-type-copilot")
+    expect(githubCopilotCli?.icon).toBe("vscode-icons:file-type-copilot")
+    expect(junie?.icon).toBe("vscode-icons:file-type-jetbrains")
     expect(codex?.icon).toBeUndefined()
   })
 })

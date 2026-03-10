@@ -27,6 +27,26 @@ describe("createSnapshot", () => {
           },
         },
         {
+          id: "github-copilot",
+          name: "GitHub Copilot",
+          distribution: {
+            npx: {
+              package: "@github/copilot-language-server@1.0.0",
+              args: ["--acp"],
+            },
+          },
+        },
+        {
+          id: "cursor",
+          name: "Cursor",
+          distribution: {
+            npx: {
+              package: "@example/cursor@1.0.0",
+              args: ["--acp"],
+            },
+          },
+        },
+        {
           id: "binary-only",
           name: "Binary Only",
           distribution: {
@@ -71,6 +91,28 @@ describe("createSnapshot", () => {
           env: [],
           transport: "stdio",
           installHint: "Runs via uvx fast-agent-acp==0.5.9 -x.",
+        },
+        {
+          id: "github-copilot",
+          label: "GitHub Copilot",
+          kind: "github-copilot",
+          command: "npx",
+          args: ["-y", "@github/copilot-language-server@1.0.0", "--acp"],
+          env: [],
+          transport: "stdio",
+          icon: "vscode-icons:file-type-copilot",
+          installHint: "Runs via npx -y @github/copilot-language-server@1.0.0 --acp.",
+        },
+        {
+          id: "cursor",
+          label: "Cursor",
+          kind: "cursor",
+          command: "npx",
+          args: ["-y", "@example/cursor@1.0.0", "--acp"],
+          env: [],
+          transport: "stdio",
+          icon: "vscode-icons:file-type-cursorrules",
+          installHint: "Runs via npx -y @example/cursor@1.0.0 --acp.",
         },
       ],
     })
