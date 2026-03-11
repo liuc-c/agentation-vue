@@ -188,56 +188,15 @@ function makeProvides(options?: {
         projectId: state.projectId,
         sessions: state.sessions,
       })),
-      getSessionDetail: vi.fn().mockImplementation(async (sessionId: string) => ({
-        id: sessionId,
-        url: sessionId === "sess-active" ? "http://localhost:5173/" : "http://localhost:5173/checkout",
-        status: sessionId === "sess-active" ? "active" : "closed",
+      getSessionDetail: vi.fn().mockResolvedValue({
+        id: "sess-active",
+        url: "http://localhost:5173/",
+        status: "active",
         createdAt: "2026-03-10T00:00:00.000Z",
         updatedAt: "2026-03-10T00:10:00.000Z",
         projectId: "demo-app",
-        metadata: {
-          agentationLastAgentId: "claude",
-          agentationLastAgentLabel: "Claude",
-        },
-        annotations: [{
-          id: `${sessionId}-annotation-1`,
-          schemaVersion: 1 as const,
-          timestamp: "2026-03-10T00:00:00.000Z",
-          url: "http://localhost:5173/",
-          elementSelector: "button.primary",
-          comment: "Fix spacing",
-          status: "resolved" as const,
-          resolvedBy: "agent" as const,
-          source: {
-            framework: "vue" as const,
-            componentName: "HeroCard",
-            file: "src/components/HeroCard.vue",
-            line: 42,
-            resolver: "vue-tracer",
-          },
-          thread: [{
-            id: `${sessionId}-thread-1`,
-            role: "agent" as const,
-            content: "Adjusted button spacing.",
-            timestamp: "2026-03-10T00:05:00.000Z",
-          }],
-        }, {
-          id: `${sessionId}-annotation-2`,
-          schemaVersion: 1 as const,
-          timestamp: "2026-03-10T00:01:00.000Z",
-          url: "http://localhost:5173/",
-          elementSelector: ".hero-card",
-          comment: "Tighten vertical rhythm",
-          status: "pending" as const,
-          source: {
-            framework: "vue" as const,
-            componentName: "HeroCard",
-            file: "src/components/HeroCard.vue",
-            line: 30,
-            resolver: "vue-tracer",
-          },
-        }],
-      })),
+        annotations: [],
+      }),
       selectAgent: vi.fn().mockImplementation(async (agentId: string) => {
         state.agents = state.agents.map((agent) => ({
           ...agent,
@@ -616,17 +575,8 @@ describe("Toolbar", () => {
 
     expect(wrapper.text()).toContain("localhost:5173")
     expect(wrapper.text()).toContain("1 open / 2 total")
-
-    const viewButton = wrapper.find('button[aria-label="View"]')
-    expect(viewButton.exists()).toBe(true)
-    await viewButton.trigger("click")
-    await flushUi()
-
-    expect(bridge.agent?.getSessionDetail).toHaveBeenCalledWith("sess-active")
-    expect(wrapper.text()).toContain("1 handled")
     expect(wrapper.text()).toContain("Agent: Claude")
-    expect(wrapper.text()).toContain("Fix spacing")
-    expect(wrapper.text()).toContain("Adjusted button spacing.")
+    expect(bridge.agent?.getSessionDetail).not.toHaveBeenCalled()
 
     const terminateButton = wrapper.find('button[aria-label="Terminate"]')
     expect(terminateButton.exists()).toBe(true)

@@ -29,7 +29,6 @@ export interface ToolbarDragState {
   readonly justFinishedDrag: Readonly<Ref<boolean>>
   readonly toolbarStyle: ComputedRef<CSSProperties | undefined>
   bindToolbarRef(element: HTMLElement | null): void
-  onMouseDown(event: MouseEvent): void
   consumeJustFinishedDrag(): boolean
   syncConstraints(): void
 }
@@ -261,9 +260,6 @@ export function useToolbarDrag(options: {
     updateMeasurements()
   }
 
-  /** Noop — retained for API compatibility. Drag is now handled by useDraggable. */
-  function onMouseDown(_event: MouseEvent): void {}
-
   function consumeJustFinishedDrag(): boolean {
     const v = justFinishedDrag.value
     justFinishedDrag.value = false
@@ -310,7 +306,6 @@ export function useToolbarDrag(options: {
     justFinishedDrag,
     toolbarStyle,
     bindToolbarRef,
-    onMouseDown,
     consumeJustFinishedDrag,
     syncConstraints,
   }

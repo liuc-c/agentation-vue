@@ -138,12 +138,22 @@ describe("storage", () => {
       expect(unsynced[0].id).toBe("a2")
     })
 
-    it("does not requeue annotations that already belong to another session", () => {
+    it("requeues annotations when syncing to a replacement session", () => {
       const synced = { ...makeAnnotation("a1"), _syncedTo: "session-1" }
       saveAnnotations("/", [synced], { storage })
 
       const unsynced = getUnsyncedAnnotations("/", "session-2", { storage })
-      expect(unsynced).toEqual([])
+      expect(unsynced).toHaveLength(1)
+      expect(unsynced[0].id).toBe("a1")
+    })
+
+    it("treats active annotations as pending when no current session exists", () => {
+      const synced = { ...makeAnnotation("a1"), _syncedTo: "session-1" }
+      const pending = makeAnnotation("a2")
+      saveAnnotations("/", [synced, pending], { storage })
+
+      const unsynced = getUnsyncedAnnotations("/", undefined, { storage })
+      expect(unsynced.map((annotation) => annotation.id)).toEqual(["a1", "a2"])
     })
 
     it("marks annotations as synced", () => {

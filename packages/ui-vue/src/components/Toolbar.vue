@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type ComponentPublicInstance, type CSSProperties } from "vue"
-import type { AnnotationStatus, AnnotationV2 } from "@liuovo/agentation-vue-core"
 import { ANNOTATIONS_STORE_KEY, FREEZE_KEY, I18N_KEY, OVERLAY_KEY, RUNTIME_BRIDGE_KEY, SELECTION_KEY, SETTINGS_KEY } from "../injection-keys.js"
+import { writeTextToClipboard } from "../clipboard.js"
 import { COPY_EXCLUDE_FIELDS } from "../copy-fields.js"
 import { COLOR_OPTIONS } from "../composables/useSettings.js"
 import { originalSetTimeout } from "../composables/useFreezeState.js"
@@ -11,7 +11,6 @@ import { injectStrict } from "../utils.js"
 import type { ExportActions } from "../composables/useExport.js"
 import type {
   AgentDispatchState,
-  AgentSessionDetail,
   AgentSessionSummary,
   AgentSummary,
 } from "../types.js"
@@ -50,13 +49,6 @@ const HELP_ICON_SIZE = 16
 const SETTINGS_PANEL_MAX_HEIGHT = 520
 
 type SettingsPage = typeof SETTINGS_PAGE_KEYS[number]
-type SessionDetailStatus = "idle" | "loading" | "loaded" | "error"
-
-interface SessionDetailState {
-  status: SessionDetailStatus
-  detail?: AgentSessionDetail
-  error?: string
-}
 
 const props = defineProps<{
   exportActions: ExportActions
@@ -113,11 +105,9 @@ const companionEndpoint = computed(() => syncInfo.value?.endpoint ?? "http://loc
 const mcpHttpEndpoint = computed(() => syncInfo.value?.mcpHttpUrl ?? "http://localhost:4748/mcp")
 const agentSummaries = ref<AgentSummary[]>([])
 const agentSessions = ref<AgentSessionSummary[]>([])
-const agentSessionDetails = ref<Record<string, SessionDetailState>>({})
 const agentDispatchState = ref<AgentDispatchState | null>(null)
 const agentActionPending = ref<"select" | "connect" | "disconnect" | "dispatch" | "cancel" | null>(null)
 const sessionActionPending = ref<string | null>(null)
-const expandedSessionId = ref<string | null>(null)
 const agentBridgeAvailable = computed(() => Boolean(bridge.agent))
 const activeAgent = computed(() => agentSummaries.value.find((agent) => agent.isActive) ?? null)
 const sortedAgentSummaries = computed(() =>
@@ -216,22 +206,6 @@ const primaryAgentActionDisabled = computed(() => {
   return dispatchInFlight.value
 })
 
-function setSessionDetailState(sessionId: string, state: SessionDetailState): void {
-  agentSessionDetails.value = {
-    ...agentSessionDetails.value,
-    [sessionId]: state,
-  }
-}
-
-function getSessionDetailState(sessionId: string): SessionDetailState {
-  return agentSessionDetails.value[sessionId] ?? { status: "idle" }
-}
-
-function getLoadedSessionDetail(sessionId: string): AgentSessionDetail | undefined {
-  const state = getSessionDetailState(sessionId)
-  return state.status === "loaded" ? state.detail : undefined
-}
-
 // Sync toolbar expanded state → annotation mode.
 // Collapsing disables selection; expanding re-enables it.
 // `immediate` ensures store.enabled = false on startup (expanded starts false).
@@ -320,7 +294,6 @@ function toggleMarkers(): void {
 function closeSettingsPanel(): void {
   settingsOpen.value = false
   settingsPage.value = "main"
-  expandedSessionId.value = null
 }
 
 function toggleSettingsPanel(): void {
@@ -446,9 +419,6 @@ async function refreshAgentSessions(): Promise<void> {
   try {
     const state = await bridge.agent.listSessions()
     agentSessions.value = state.sessions
-    if (expandedSessionId.value && state.sessions.some((session) => session.id === expandedSessionId.value)) {
-      await loadSessionDetail(expandedSessionId.value, true)
-    }
   } catch (error) {
     bridge.notify?.({
       kind: "warning",
@@ -514,7 +484,6 @@ async function closeAgentSession(sessionId: string): Promise<void> {
   try {
     const state = await bridge.agent.closeSession(sessionId)
     agentSessions.value = state.sessions
-    await loadSessionDetail(sessionId, true)
   } catch (error) {
     bridge.notify?.({
       kind: "warning",
@@ -566,17 +535,6 @@ function getSessionStatusLabel(status: AgentSessionSummary["status"]): string {
   }
 }
 
-function toggleSessionDetails(sessionId: string): void {
-  const nextSessionId = expandedSessionId.value === sessionId ? null : sessionId
-  expandedSessionId.value = nextSessionId
-  if (nextSessionId) {
-    void loadSessionDetail(nextSessionId)
-  }
-  void nextTick().then(() => {
-    syncSettingsPanelHeight()
-  })
-}
-
 function getSessionDisplayTitle(session: AgentSessionSummary): string {
   try {
     const url = new URL(session.url)
@@ -609,39 +567,8 @@ function readRecordedSessionAgent(metadata?: Record<string, unknown>): { id?: st
   }
 }
 
-function deriveRecordedSessionAgent(detail: AgentSessionDetail): { id?: string; label: string } | null {
-  const recorded = readRecordedSessionAgent(detail.metadata)
-  if (recorded) {
-    return recorded
-  }
-
-  const agentIds = [...new Set(
-    detail.annotations
-      .map((annotation) => annotation.processingByAgentId?.trim())
-      .filter((agentId): agentId is string => Boolean(agentId)),
-  )]
-
-  if (agentIds.length !== 1) {
-    return null
-  }
-
-  return {
-    id: agentIds[0],
-    label: agentIds[0],
-  }
-}
-
-function getSessionRecordedAgentLabel(session: AgentSessionSummary): string {
-  return readRecordedSessionAgent(session.metadata)?.label ?? ""
-}
-
-function getLoadedSessionAgentLabel(sessionId: string): string {
-  const detail = getLoadedSessionDetail(sessionId)
-  return detail ? deriveRecordedSessionAgent(detail)?.label ?? "" : ""
-}
-
 function getSessionAgentLabel(session: AgentSessionSummary): string {
-  return getSessionRecordedAgentLabel(session) || getLoadedSessionAgentLabel(session.id)
+  return readRecordedSessionAgent(session.metadata)?.label ?? ""
 }
 
 function formatSessionTimestamp(value?: string): string {
@@ -658,199 +585,6 @@ function formatSessionTimestamp(value?: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date)
-}
-
-function getAnnotationStatus(annotation: AnnotationV2): AnnotationStatus {
-  return annotation.status ?? "pending"
-}
-
-function getAnnotationStatusLabel(status: AnnotationStatus): string {
-  switch (status) {
-    case "acknowledged":
-      return messages.value.workflow.statusAcknowledged
-    case "processing":
-      return messages.value.workflow.statusProcessing
-    case "resolved":
-      return messages.value.workflow.statusResolved
-    case "dismissed":
-      return messages.value.workflow.statusDismissed
-    default:
-      return messages.value.workflow.statusPending
-  }
-}
-
-function getAnnotationStatusTone(status: AnnotationStatus): AnnotationStatus {
-  switch (status) {
-    case "acknowledged":
-    case "processing":
-    case "resolved":
-    case "dismissed":
-      return status
-    default:
-      return "pending"
-  }
-}
-
-function getAnnotationActivityTimestamp(annotation: AnnotationV2): string {
-  return annotation.updatedAt ?? annotation.resolvedAt ?? annotation.createdAt ?? annotation.timestamp
-}
-
-function getAnnotationSourceLabel(annotation: AnnotationV2): string {
-  const { file, line } = annotation.source
-  return line ? `${file}:${line}` : file
-}
-
-function getAnnotationAgentReplyCount(annotation: AnnotationV2): number {
-  return (annotation.thread ?? []).filter((message) => message.role === "agent").length
-}
-
-function getAnnotationThreadCount(annotation: AnnotationV2): number {
-  return annotation.thread?.length ?? 0
-}
-
-function isHandledAnnotation(annotation: AnnotationV2): boolean {
-  const status = getAnnotationStatus(annotation)
-  return status === "processing"
-    || status === "resolved"
-    || status === "dismissed"
-    || getAnnotationAgentReplyCount(annotation) > 0
-}
-
-function getSessionDetailStats(detail: AgentSessionDetail): Array<{ key: string; label: string; tone?: string }> {
-  const pendingCount = detail.annotations.filter((annotation) => getAnnotationStatus(annotation) === "pending").length
-  const processingCount = detail.annotations.filter((annotation) => getAnnotationStatus(annotation) === "processing").length
-  const resolvedCount = detail.annotations.filter((annotation) => getAnnotationStatus(annotation) === "resolved").length
-  const dismissedCount = detail.annotations.filter((annotation) => getAnnotationStatus(annotation) === "dismissed").length
-  const handledCount = detail.annotations.filter(isHandledAnnotation).length
-  const agentReplyCount = detail.annotations.reduce((count, annotation) => count + getAnnotationAgentReplyCount(annotation), 0)
-
-  return [
-    {
-      key: "total",
-      label: messages.value.settings.sessionAnnotationCount(detail.annotations.length),
-    },
-    {
-      key: "handled",
-      label: messages.value.settings.sessionHandledCount(handledCount),
-      tone: "handled",
-    },
-    ...(pendingCount > 0 ? [{
-      key: "pending",
-      label: `${messages.value.workflow.statusPending} ${pendingCount}`,
-      tone: "pending",
-    }] : []),
-    ...(processingCount > 0 ? [{
-      key: "processing",
-      label: `${messages.value.workflow.statusProcessing} ${processingCount}`,
-      tone: "processing",
-    }] : []),
-    ...(resolvedCount > 0 ? [{
-      key: "resolved",
-      label: `${messages.value.workflow.statusResolved} ${resolvedCount}`,
-      tone: "resolved",
-    }] : []),
-    ...(dismissedCount > 0 ? [{
-      key: "dismissed",
-      label: `${messages.value.workflow.statusDismissed} ${dismissedCount}`,
-      tone: "dismissed",
-    }] : []),
-    ...(agentReplyCount > 0 ? [{
-      key: "replies",
-      label: `${messages.value.workflow.roleAgent} · ${messages.value.workflow.replyCount(agentReplyCount)}`,
-      tone: "reply",
-    }] : []),
-  ]
-}
-
-function getSortedSessionAnnotations(detail: AgentSessionDetail): AnnotationV2[] {
-  return [...detail.annotations].sort((left, right) => {
-    if (isHandledAnnotation(left) !== isHandledAnnotation(right)) {
-      return isHandledAnnotation(left) ? -1 : 1
-    }
-
-    return Date.parse(getAnnotationActivityTimestamp(right)) - Date.parse(getAnnotationActivityTimestamp(left))
-  })
-}
-
-function getSessionDetailStatsById(sessionId: string): Array<{ key: string; label: string; tone?: string }> {
-  const detail = getLoadedSessionDetail(sessionId)
-  return detail ? getSessionDetailStats(detail) : []
-}
-
-function getSortedSessionAnnotationsById(sessionId: string): AnnotationV2[] {
-  const detail = getLoadedSessionDetail(sessionId)
-  return detail ? getSortedSessionAnnotations(detail) : []
-}
-
-function getSessionDetailAnnotationCount(sessionId: string): number {
-  return getLoadedSessionDetail(sessionId)?.annotations.length ?? 0
-}
-
-function getSessionAnnotationMeta(annotation: AnnotationV2): string[] {
-  const meta = [getAnnotationSourceLabel(annotation)]
-  const activityTime = formatSessionTimestamp(getAnnotationActivityTimestamp(annotation))
-  if (activityTime) {
-    meta.push(activityTime)
-  }
-
-  const threadCount = getAnnotationThreadCount(annotation)
-  if (threadCount > 0) {
-    meta.push(messages.value.workflow.replyCount(threadCount))
-  }
-
-  if (annotation.processingByAgentId) {
-    meta.push(`${messages.value.workflow.roleAgent}: ${annotation.processingByAgentId}`)
-  } else if (annotation.resolvedBy === "agent") {
-    meta.push(`${messages.value.workflow.roleAgent}: ${messages.value.workflow.statusResolved}`)
-  }
-
-  return meta
-}
-
-function getSessionAnnotationThreadPreview(annotation: AnnotationV2): NonNullable<AnnotationV2["thread"]> {
-  return (annotation.thread ?? []).slice(-3)
-}
-
-async function loadSessionDetail(sessionId: string, force = false): Promise<void> {
-  if (!bridge.agent) return
-
-  const current = getSessionDetailState(sessionId)
-  if (current.status === "loading") return
-  if (!force && current.status === "loaded") return
-
-  setSessionDetailState(sessionId, {
-    status: "loading",
-    ...(current.detail ? { detail: current.detail } : {}),
-  })
-
-  try {
-    const detail = await bridge.agent.getSessionDetail(sessionId)
-    setSessionDetailState(sessionId, {
-      status: "loaded",
-      detail,
-    })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to load session detail"
-    if (current.detail) {
-      bridge.notify?.({
-        kind: "warning",
-        duration: 2800,
-        message,
-      })
-      setSessionDetailState(sessionId, {
-        status: "loaded",
-        detail: current.detail,
-      })
-    } else {
-      setSessionDetailState(sessionId, {
-        status: "error",
-        error: message,
-      })
-    }
-  }
-
-  await nextTick()
-  syncSettingsPanelHeight()
 }
 
 function toggleCopyExcludedField(field: typeof COPY_EXCLUDE_FIELDS[number]): void {
@@ -870,7 +604,6 @@ watch(
     () => agentDispatchState.value?.state,
     latestAgentActivity,
     () => agentSessions.value.length,
-    expandedSessionId,
   ],
   async ([isOpen]) => {
     if (!isOpen) {
@@ -933,36 +666,6 @@ async function copyGuideValue(key: string, value: string): Promise<void> {
     }
     guideCopyTimer = null
   }, 1400)
-}
-
-async function writeTextToClipboard(text: string): Promise<boolean> {
-  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text)
-      return true
-    } catch {
-      // Fall through to legacy copy.
-    }
-  }
-
-  if (typeof document === "undefined") return false
-
-  const textarea = document.createElement("textarea")
-  textarea.value = text
-  textarea.setAttribute("readonly", "true")
-  textarea.style.position = "fixed"
-  textarea.style.opacity = "0"
-  textarea.style.pointerEvents = "none"
-  document.body.appendChild(textarea)
-  textarea.select()
-
-  try {
-    return document.execCommand("copy")
-  } catch {
-    return false
-  } finally {
-    textarea.remove()
-  }
 }
 
 function syncSettingsPanelHeight(): void {
@@ -1491,7 +1194,7 @@ function getMaxSettingsPanelHeight(): number {
               <div class="settings-section">
                 <div v-if="sortedAgentSessions.length > 0" class="session-list">
                   <div v-for="session in sortedAgentSessions" :key="session.id" class="session-card"
-                    :class="{ light: isLight, expanded: expandedSessionId === session.id }">
+                    :class="{ light: isLight }">
                     <div class="session-card-main">
                       <div class="session-card-title-row">
                         <strong class="guide-card-title">{{ getSessionDisplayTitle(session) }}</strong>
@@ -1505,131 +1208,16 @@ function getMaxSettingsPanelHeight(): number {
                         <span v-if="getSessionAgentLabel(session)">{{ messages.settings.sessionAgentLabel }}: {{
                           getSessionAgentLabel(session) }}</span>
                       </div>
+                      <pre class="guide-code session-url" :class="{ light: isLight }">{{ session.url }}</pre>
                     </div>
 
-                    <div class="session-card-actions">
-                      <button class="icon-action-btn"
-                        :class="{ light: isLight, active: expandedSessionId === session.id }" type="button"
-                        :title="expandedSessionId === session.id ? messages.settings.hideSession : messages.settings.viewSession"
-                        :aria-label="expandedSessionId === session.id ? messages.settings.hideSession : messages.settings.viewSession"
-                        :disabled="sessionActionPending !== null" @click="toggleSessionDetails(session.id)">
-                        <IconEye v-if="expandedSessionId !== session.id" :size="14" />
-                        <IconEyeOff v-else :size="14" />
-                      </button>
-                      <button v-if="session.status !== 'closed'" class="icon-action-btn" :class="{ light: isLight }"
+                    <div v-if="session.status !== 'closed'" class="session-card-actions">
+                      <button class="icon-action-btn" :class="{ light: isLight }"
                         type="button" :title="messages.settings.closeSession"
                         :aria-label="messages.settings.closeSession" :disabled="sessionActionPending !== null"
                         @click="void closeAgentSession(session.id)">
                         <IconClose :size="14" />
                       </button>
-                    </div>
-
-                    <div v-if="expandedSessionId === session.id" class="session-card-details"
-                      :class="{ light: isLight }">
-                      <div class="session-detail-row">
-                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionIdLabel
-                        }}</span>
-                        <code>{{ session.id }}</code>
-                      </div>
-                      <div class="session-detail-row">
-                        <span class="settings-label" :class="{ light: isLight }">{{
-                          messages.settings.sessionAnnotationsLabel }}</span>
-                        <span>{{ messages.settings.sessionAnnotationCount(session.annotationCount) }}</span>
-                      </div>
-                      <div class="session-detail-row">
-                        <span class="settings-label" :class="{ light: isLight }">{{
-                          messages.settings.sessionCreatedLabel }}</span>
-                        <span>{{ formatSessionTimestamp(session.createdAt) }}</span>
-                      </div>
-                      <div class="session-detail-row" v-if="session.updatedAt">
-                        <span class="settings-label" :class="{ light: isLight }">{{
-                          messages.settings.sessionUpdatedLabel }}</span>
-                        <span>{{ formatSessionTimestamp(session.updatedAt) }}</span>
-                      </div>
-                      <div class="session-detail-row" v-if="getSessionAgentLabel(session)">
-                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionAgentLabel
-                        }}</span>
-                        <span>{{ getSessionAgentLabel(session) }}</span>
-                      </div>
-                      <div class="session-detail-stack">
-                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionUrlLabel
-                        }}</span>
-                        <pre class="guide-code session-url" :class="{ light: isLight }">{{ session.url }}</pre>
-                      </div>
-                      <div class="session-detail-stack">
-                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentLastActivity
-                        }}</span>
-
-                        <div v-if="getSessionDetailState(session.id).status === 'loading'"
-                          class="session-detail-feedback" :class="{ light: isLight }">
-                          {{ messages.settings.sessionDetailLoading }}
-                        </div>
-
-                        <div v-else-if="getSessionDetailState(session.id).status === 'error'"
-                          class="session-detail-feedback error" :class="{ light: isLight }">
-                          <span>{{ messages.settings.sessionDetailError(getSessionDetailState(session.id).error ?? "")
-                          }}</span>
-                          <button class="mini-btn" :class="{ light: isLight }" type="button"
-                            :disabled="sessionActionPending !== null" @click="void loadSessionDetail(session.id, true)">
-                            {{ messages.settings.refreshSessions }}
-                          </button>
-                        </div>
-
-                        <template v-else-if="getLoadedSessionDetail(session.id)">
-                          <div class="session-stat-list">
-                            <span v-for="chip in getSessionDetailStatsById(session.id)" :key="chip.key"
-                              class="session-stat-chip" :class="[chip.tone ?? 'default', { light: isLight }]">
-                              {{ chip.label }}
-                            </span>
-                          </div>
-
-                          <div v-if="getSessionDetailAnnotationCount(session.id) === 0" class="session-detail-feedback"
-                            :class="{ light: isLight }">
-                            {{ messages.settings.sessionNoAnnotations }}
-                          </div>
-
-                          <div v-else class="session-annotation-list">
-                            <article v-for="annotation in getSortedSessionAnnotationsById(session.id)"
-                              :key="annotation.id" class="session-annotation-item" :class="{ light: isLight }">
-                              <div class="session-annotation-header">
-                                <div class="session-annotation-copy">
-                                  <strong class="session-annotation-comment">{{ annotation.comment }}</strong>
-                                  <div class="session-annotation-meta" :class="{ light: isLight }">
-                                    <span v-for="meta in getSessionAnnotationMeta(annotation)" :key="meta">{{ meta
-                                    }}</span>
-                                  </div>
-                                </div>
-                                <span class="agent-pill"
-                                  :class="[getAnnotationStatusTone(getAnnotationStatus(annotation)), { light: isLight }]">
-                                  {{ getAnnotationStatusLabel(getAnnotationStatus(annotation)) }}
-                                </span>
-                              </div>
-
-                              <div v-if="getSessionAnnotationThreadPreview(annotation).length"
-                                class="session-thread-preview">
-                                <div class="thread-title" :class="{ light: isLight }">{{ messages.workflow.thread }}
-                                </div>
-                                <div class="session-thread-list">
-                                  <div v-for="message in getSessionAnnotationThreadPreview(annotation)"
-                                    :key="message.id" class="session-thread-item" :class="{ light: isLight }"
-                                    :data-role="message.role">
-                                    <div class="session-thread-meta" :class="{ light: isLight }">
-                                      <span>{{ message.role === 'agent' ? messages.workflow.roleAgent :
-                                        messages.workflow.roleHuman }}</span>
-                                      <span>{{ formatSessionTimestamp(typeof message.timestamp === 'number'
-                                        ? new Date(message.timestamp).toISOString()
-                                        : message.timestamp) }}</span>
-                                    </div>
-                                    <div class="session-thread-content" :class="{ light: isLight }">
-                                      {{ message.content }}
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            </article>
-                          </div>
-                        </template>
-                      </div>
                     </div>
                   </div>
                 </div>
@@ -3105,14 +2693,6 @@ function getMaxSettingsPanelHeight(): number {
   background: rgba(0, 0, 0, 0.02);
 }
 
-.session-card.expanded {
-  border-color: rgba(255, 255, 255, 0.16);
-}
-
-.session-card.expanded.light {
-  border-color: rgba(15, 23, 42, 0.14);
-}
-
 .session-card-main {
   display: grid;
   gap: 6px;
@@ -3142,235 +2722,6 @@ function getMaxSettingsPanelHeight(): number {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-.session-card-details {
-  display: grid;
-  gap: 10px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.session-card-details.light {
-  border-top-color: rgba(0, 0, 0, 0.08);
-}
-
-.session-detail-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 11px;
-  line-height: 1.45;
-  color: rgba(255, 255, 255, 0.82);
-}
-
-.settings-panel.light .session-detail-row {
-  color: rgba(15, 23, 42, 0.82);
-}
-
-.session-detail-row code {
-  max-width: 188px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.session-detail-stack {
-  display: grid;
-  gap: 6px;
-}
-
-.session-detail-feedback {
-  display: grid;
-  gap: 8px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(255, 255, 255, 0.75);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.session-detail-feedback.light {
-  background: rgba(0, 0, 0, 0.03);
-  color: rgba(15, 23, 42, 0.7);
-}
-
-.session-detail-feedback.error {
-  border: 1px solid rgba(239, 68, 68, 0.16);
-}
-
-.session-stat-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.session-stat-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 0 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.session-stat-chip.light {
-  border-color: rgba(0, 0, 0, 0.08);
-  background: rgba(0, 0, 0, 0.03);
-  color: rgba(15, 23, 42, 0.76);
-}
-
-.session-stat-chip.handled {
-  border-color: rgba(96, 165, 250, 0.2);
-  color: #60a5fa;
-}
-
-.session-stat-chip.pending {
-  border-color: rgba(148, 163, 184, 0.18);
-}
-
-.session-stat-chip.processing,
-.session-stat-chip.installable,
-.session-stat-chip.reply {
-  border-color: rgba(245, 158, 11, 0.18);
-  color: #f59e0b;
-}
-
-.session-stat-chip.resolved {
-  border-color: rgba(34, 197, 94, 0.18);
-  color: #22c55e;
-}
-
-.session-stat-chip.dismissed {
-  border-color: rgba(239, 68, 68, 0.18);
-  color: #ef4444;
-}
-
-.session-annotation-list {
-  display: grid;
-  gap: 10px;
-}
-
-.session-annotation-item {
-  display: grid;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.025);
-}
-
-.session-annotation-item.light {
-  border-color: rgba(0, 0, 0, 0.08);
-  background: rgba(0, 0, 0, 0.02);
-}
-
-.session-annotation-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.session-annotation-copy {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.session-annotation-comment {
-  font-size: 12px;
-  line-height: 1.45;
-  color: rgba(255, 255, 255, 0.92);
-}
-
-.session-annotation-item.light .session-annotation-comment {
-  color: rgba(15, 23, 42, 0.9);
-}
-
-.session-annotation-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 11px;
-  line-height: 1.45;
-  color: rgba(255, 255, 255, 0.46);
-}
-
-.session-annotation-meta.light {
-  color: rgba(0, 0, 0, 0.42);
-}
-
-.session-thread-preview {
-  display: grid;
-  gap: 8px;
-}
-
-.thread-title {
-  font-size: 11px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.58);
-}
-
-.thread-title.light {
-  color: rgba(0, 0, 0, 0.48);
-}
-
-.session-thread-list {
-  display: grid;
-  gap: 8px;
-}
-
-.session-thread-item {
-  display: grid;
-  gap: 4px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.session-thread-item[data-role="human"] {
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.session-thread-item.light {
-  background: rgba(0, 0, 0, 0.03);
-}
-
-.session-thread-item.light[data-role="human"] {
-  background: rgba(0, 0, 0, 0.05);
-}
-
-.session-thread-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 10px;
-  line-height: 1.4;
-  color: rgba(255, 255, 255, 0.44);
-}
-
-.session-thread-meta.light {
-  color: rgba(0, 0, 0, 0.42);
-}
-
-.session-thread-content {
-  font-size: 11px;
-  line-height: 1.45;
-  color: rgba(255, 255, 255, 0.84);
-  white-space: pre-wrap;
-}
-
-.session-thread-content.light {
-  color: rgba(15, 23, 42, 0.82);
 }
 
 .session-url {

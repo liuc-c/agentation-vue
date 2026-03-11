@@ -384,6 +384,35 @@ describe("AgentManager", () => {
     })
   })
 
+  it("fails a queued dispatch when runtime startup rejects", async () => {
+    mocks.client.initialize.mockRejectedValueOnce(new Error("auth failed"))
+
+    const { AgentManager } = await import("./agent-manager.js")
+    const manager = new AgentManager({
+      httpBaseUrl: "http://localhost:4748",
+    })
+
+    const result = await manager.dispatch({
+      projectId: "demo-app",
+      mode: "manual",
+      trigger: "manual.send",
+    })
+
+    expect(result).toMatchObject({
+      state: "queued",
+    })
+    await vi.waitFor(() => {
+      expect(manager.getDispatchState("demo-app")).toMatchObject({
+        state: "failed",
+        claimedCount: 0,
+        completedCount: 0,
+        message: "auth failed",
+      })
+    })
+    expect(mocks.client.prompt).not.toHaveBeenCalled()
+    expect(mocks.releaseAnnotationV2).not.toHaveBeenCalled()
+  })
+
   it("queues the next dispatch until the current run finishes", async () => {
     let resolveFirstPrompt: (() => void) | undefined
     const firstPrompt = new Promise((resolve) => {

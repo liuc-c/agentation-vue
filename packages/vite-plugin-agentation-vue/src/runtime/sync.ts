@@ -345,8 +345,7 @@ export function createRuntimeSyncBridge(
         sid = ready && sessionId ? sessionId : undefined
       }
 
-      const pending = (getUnsyncedAnnotations(pathname(), sid, storage.options) as StoredAnnotation[])
-        .filter((annotation) => !annotation._syncedTo || !closedSessionIds.has(annotation._syncedTo))
+      const pending = getUnsyncedAnnotations(pathname(), sid, storage.options) as StoredAnnotation[]
 
       if (!sid && pending.length === 0) {
         await pruneInactiveProjectSessions()

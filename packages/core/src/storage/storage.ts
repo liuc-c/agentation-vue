@@ -234,11 +234,15 @@ export function markAnnotationsSynced(
 
 export function getUnsyncedAnnotations(
   pathname: string,
-  _sessionId?: string,
+  sessionId?: string,
   options: StorageOptions = {},
 ): AnnotationV2[] {
   const annotations = loadAnnotations<AnnotationV2 & { _syncedTo?: string }>(pathname, options)
-  return annotations.filter((annotation) => !annotation._syncedTo)
+  if (!sessionId?.trim()) {
+    return annotations
+  }
+
+  return annotations.filter((annotation) => annotation._syncedTo !== sessionId)
 }
 
 export function clearSyncMarkers(

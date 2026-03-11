@@ -3,9 +3,10 @@ import { formatToJSON, formatToMarkdown, type ExportPageContext } from "@liuovo/
 import { originalSetTimeout } from "./useFreezeState.js"
 import type { AnnotationsStore } from "./useAnnotationsStore.js"
 import type { SettingsState } from "./useSettings.js"
+import { writeTextToClipboard } from "../clipboard.js"
 
 // ---------------------------------------------------------------------------
-// Export composable — clipboard write + download fallback
+// Export composable — clipboard write + feedback
 // ---------------------------------------------------------------------------
 
 export type ExportFormat = "json" | "markdown"
@@ -21,23 +22,13 @@ export interface ExportActions {
 
 /**
  * Creates export actions bound to a store and settings state.
- * Handles clipboard write with "Copied!" feedback and download fallback.
+ * Handles clipboard write with transient "Copied!" feedback.
  */
 export function createExportActions(
   store: AnnotationsStore,
   settings: SettingsState,
 ): ExportActions {
   const copyFeedback = ref<ExportFormat | null>(null)
-
-  async function writeClipboard(text: string): Promise<boolean> {
-    try {
-      await navigator.clipboard.writeText(text)
-      return true
-    } catch {
-      downloadFallback(text, "agentation-export.txt")
-      return false
-    }
-  }
 
   function flash(kind: ExportFormat): void {
     copyFeedback.value = kind
@@ -46,24 +37,14 @@ export function createExportActions(
     }, 1400)
   }
 
-  function downloadFallback(content: string, filename: string): void {
-    const blob = new Blob([content], { type: "text/plain" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = filename
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
   async function exportJSON(): Promise<void> {
     const payload = buildClipboardPayload("json")
-    if (await writeClipboard(payload)) flash("json")
+    if (await writeTextToClipboard(payload)) flash("json")
   }
 
   async function exportMarkdown(): Promise<void> {
     const payload = buildClipboardPayload("markdown")
-    if (await writeClipboard(payload)) flash("markdown")
+    if (await writeTextToClipboard(payload)) flash("markdown")
   }
 
   function buildClipboardPayload(format: ExportFormat): string {

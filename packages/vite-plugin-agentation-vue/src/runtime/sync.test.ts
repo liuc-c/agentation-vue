@@ -213,7 +213,7 @@ describe("createRuntimeSyncBridge", () => {
     bridge.dispose()
   })
 
-  it("does not re-upsert annotations that belong to a closed session", async () => {
+  it("requeues pending annotations from a replaced session into the next session", async () => {
     const closedAnnotation = {
       id: "annotation-closed",
       schemaVersion: 1 as const,
@@ -292,7 +292,14 @@ describe("createRuntimeSyncBridge", () => {
 
     await bridge.init()
 
-    expect(core.syncAnnotation).toHaveBeenCalledTimes(1)
+    expect(core.syncAnnotation).toHaveBeenCalledTimes(2)
+    expect(core.syncAnnotation).toHaveBeenCalledWith(
+      "http://localhost:4748",
+      "sess-new",
+      expect.objectContaining({
+        id: "annotation-closed",
+      }),
+    )
     expect(core.syncAnnotation).toHaveBeenCalledWith(
       "http://localhost:4748",
       "sess-new",
@@ -300,14 +307,12 @@ describe("createRuntimeSyncBridge", () => {
         id: "annotation-new",
       }),
     )
-    expect(core.syncAnnotation).not.toHaveBeenCalledWith(
-      "http://localhost:4748",
+    expect(core.markAnnotationsSynced).toHaveBeenCalledWith(
+      "/",
+      ["annotation-closed", "annotation-new"],
       "sess-new",
-      expect.objectContaining({
-        id: "annotation-closed",
-      }),
+      {},
     )
-    expect(core.markAnnotationsSynced).toHaveBeenCalledWith("/", ["annotation-new"], "sess-new", {})
 
     bridge.dispose()
   })

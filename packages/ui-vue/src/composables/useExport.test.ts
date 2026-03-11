@@ -116,4 +116,14 @@ describe("createExportActions", () => {
     expect(payload).not.toContain("Selected text")
     expect(payload).toContain("Update the label")
   })
+
+  it("does not set copy feedback when clipboard write fails", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"))
+    Object.assign(navigator, { clipboard: { writeText } })
+
+    const actions = createExportActions(store, settings)
+    await actions.exportJSON()
+
+    expect(actions.copyFeedback).toBeNull()
+  })
 })

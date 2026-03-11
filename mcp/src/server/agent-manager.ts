@@ -941,59 +941,64 @@ export class AgentManager {
     }
 
     const sessions = this.collectSessions(run.projectId, run.sessionIds)
-    const runtime = await this.ensureRuntime(run.projectId, run.agentId)
-    if (!runtime.sessionId) {
-      throw new Error("Agent session was not established")
-    }
+    let runtime: AgentRuntime | undefined
+    let annotations: AnnotationV2[] = []
+    let activeRun: PendingDispatchRun | undefined
+    let unsubscribeRunUpdates = () => {}
 
-    const annotations = this.claimPendingAnnotations(run.projectId, run.agentId, run.runId, run.sessionIds)
-    if (annotations.length === 0) {
-      return this.updateDispatchState(run.projectId, {
+    try {
+      runtime = await this.ensureRuntime(run.projectId, run.agentId)
+      if (!runtime.sessionId) {
+        throw new Error("Agent session was not established")
+      }
+
+      annotations = this.claimPendingAnnotations(run.projectId, run.agentId, run.runId, run.sessionIds)
+      if (annotations.length === 0) {
+        return this.updateDispatchState(run.projectId, {
+          agentId: run.agentId,
+          runId: run.runId,
+          mode: run.mode,
+          trigger: run.trigger,
+          state: "skipped",
+          claimedCount: 0,
+          completedCount: 0,
+          message: "All pending annotations are already processing",
+        }, "dispatch.skipped")
+      }
+
+      runtime.status = "busy"
+      runtime.lastAgentText = ""
+      runtime.lastError = undefined
+      runtime.lastProgressMessage = undefined
+
+      activeRun = {
+        ...run,
+        annotationIds: annotations.map((annotation) => annotation.id),
+        completedAnnotationIds: new Set<string>(),
+        cancelRequested: false,
+        currentAnnotationId: annotations[0]?.id,
+      }
+      this.activeDispatchRunByProject.set(run.projectId, activeRun)
+
+      unsubscribeRunUpdates = this.subscribeToRunAnnotationUpdates(activeRun)
+      this.emit({
+        type: "status",
+        projectId: run.projectId,
+        agent: this.summarizeAgent(run.projectId, runtime.config),
+      })
+
+      this.updateDispatchState(run.projectId, {
         agentId: run.agentId,
         runId: run.runId,
         mode: run.mode,
         trigger: run.trigger,
-        state: "skipped",
-        claimedCount: 0,
+        state: "sending",
+        claimedCount: annotations.length,
         completedCount: 0,
-        message: "All pending annotations are already processing",
-      }, "dispatch.skipped")
-    }
+        currentAnnotationId: activeRun.currentAnnotationId,
+        message: `Dispatching ${annotations.length} claimed annotation${annotations.length === 1 ? "" : "s"} to agent`,
+      }, "dispatch.started")
 
-    runtime.status = "busy"
-    runtime.lastAgentText = ""
-    runtime.lastError = undefined
-    runtime.lastProgressMessage = undefined
-
-    const activeRun: PendingDispatchRun = {
-      ...run,
-      annotationIds: annotations.map((annotation) => annotation.id),
-      completedAnnotationIds: new Set<string>(),
-      cancelRequested: false,
-      currentAnnotationId: annotations[0]?.id,
-    }
-    this.activeDispatchRunByProject.set(run.projectId, activeRun)
-
-    const unsubscribeRunUpdates = this.subscribeToRunAnnotationUpdates(activeRun)
-    this.emit({
-      type: "status",
-      projectId: run.projectId,
-      agent: this.summarizeAgent(run.projectId, runtime.config),
-    })
-
-    this.updateDispatchState(run.projectId, {
-      agentId: run.agentId,
-      runId: run.runId,
-      mode: run.mode,
-      trigger: run.trigger,
-      state: "sending",
-      claimedCount: annotations.length,
-      completedCount: 0,
-      currentAnnotationId: activeRun.currentAnnotationId,
-      message: `Dispatching ${annotations.length} claimed annotation${annotations.length === 1 ? "" : "s"} to agent`,
-    }, "dispatch.started")
-
-    try {
       const prompt = buildPrompt({
         projectId: run.projectId,
         agentId: run.agentId,
@@ -1044,6 +1049,32 @@ export class AgentManager {
         message: this.buildCompletionMessage(currentActiveRun, runtime.lastAgentText, result.stopReason),
       }, "dispatch.completed")
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!activeRun) {
+        if (runtime) {
+          runtime.status = "error"
+          runtime.lastError = message
+        }
+
+        if (annotations.length > 0) {
+          this.releaseClaimedAnnotations(annotations.map((annotation) => annotation.id), {
+            agentId: run.agentId,
+            runId: run.runId,
+          })
+        }
+
+        return this.updateDispatchState(run.projectId, {
+          agentId: run.agentId,
+          runId: run.runId,
+          mode: run.mode,
+          trigger: run.trigger,
+          state: "failed",
+          claimedCount: annotations.length,
+          completedCount: 0,
+          message,
+        }, "dispatch.failed")
+      }
+
       const currentActiveRun = this.activeDispatchRunByProject.get(run.projectId)
       if (!currentActiveRun || currentActiveRun.runId !== run.runId || currentActiveRun.cancelRequested) {
         runtime.status = "ready"
@@ -1062,7 +1093,7 @@ export class AgentManager {
       }
 
       runtime.status = "error"
-      runtime.lastError = (error as Error).message
+      runtime.lastError = message
       this.releaseClaimedAnnotations(annotations.map((annotation) => annotation.id), {
         agentId: run.agentId,
         runId: run.runId,
@@ -1075,7 +1106,7 @@ export class AgentManager {
         state: "failed",
         claimedCount: annotations.length,
         completedCount: currentActiveRun.completedAnnotationIds.size,
-        message: runtime.lastError,
+        message,
       }, "dispatch.failed")
     } finally {
       unsubscribeRunUpdates()
@@ -1083,11 +1114,13 @@ export class AgentManager {
       if (currentActiveRun?.runId === run.runId) {
         this.activeDispatchRunByProject.delete(run.projectId)
       }
-      this.emit({
-        type: "status",
-        projectId: run.projectId,
-        agent: this.summarizeAgent(run.projectId, runtime.config),
-      })
+      if (runtime) {
+        this.emit({
+          type: "status",
+          projectId: run.projectId,
+          agent: this.summarizeAgent(run.projectId, runtime.config),
+        })
+      }
 
       const nextRun = this.getNextQueuedDispatch(run.projectId)
       if (nextRun) {
