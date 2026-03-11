@@ -1,6 +1,6 @@
 {
   "name": "agentation-vue-mcp",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "description": "MCP server for Agentation - visual feedback for AI coding agents",
   "license": "PolyForm-Shield-1.0.0",
   "repository": {

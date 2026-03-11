@@ -113,6 +113,7 @@ describe("agentation plugin shared companion wiring", () => {
     expect(next).not.toHaveBeenCalled()
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/javascript; charset=utf-8")
     expect(end).toHaveBeenCalledWith(expect.stringContaining(`"projectId":"${inferredProjectId}"`))
+    expect(end).toHaveBeenCalledWith(expect.stringContaining(`"agent":{"enabled":false,"autoSend":false}`))
   })
 
   it("prefers a workspace-relative projectId for nested monorepo apps", async () => {

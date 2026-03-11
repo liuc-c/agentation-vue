@@ -13,7 +13,7 @@ describe("resolveOptions", () => {
     expect(resolved.enabled).toBe(true)
     expect(resolved.sync).toMatchObject(DEFAULT_AGENTATION_SYNC_OPTIONS)
     expect(resolved.agent).toEqual({
-      enabled: true,
+      enabled: false,
       autoSend: false,
     })
     expect(resolveMcpEndpoint(resolved.sync as Exclude<typeof resolved.sync, false>)).toBe("http://127.0.0.1:4748")

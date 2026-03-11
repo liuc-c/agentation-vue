@@ -47,6 +47,9 @@ const OUTPUT_DETAIL_KEYS = ["compact", "standard", "detailed", "forensic"] as co
 const SETTINGS_PAGE_KEYS = ["main", "copy", "automations", "sessions"] as const
 const HELP_ICON_SIZE = 16
 const SETTINGS_PANEL_MAX_HEIGHT = 520
+const COLLAPSED_TOOL_ICON_SIZE = 18
+const PRIMARY_CONTROL_ICON_SIZE = 17
+const SECONDARY_CONTROL_ICON_SIZE = 16
 
 type SettingsPage = typeof SETTINGS_PAGE_KEYS[number]
 
@@ -99,6 +102,7 @@ const currentOutputDetailLabel = computed(() => messages.value.outputDetail[sett
 const settingsPanelPlacement = computed(
   () => (drag.position.value?.y ?? Number.POSITIVE_INFINITY) < 230 ? "below" : "above",
 )
+const syncBridgeAvailable = computed(() => Boolean(bridge.sync))
 const mcpConnected = computed(() => !!bridge.sync)
 const syncInfo = computed(() => bridge.sync?.info)
 const companionEndpoint = computed(() => syncInfo.value?.endpoint ?? "http://localhost:4748")
@@ -109,6 +113,7 @@ const agentDispatchState = ref<AgentDispatchState | null>(null)
 const agentActionPending = ref<"select" | "connect" | "disconnect" | "dispatch" | "cancel" | null>(null)
 const sessionActionPending = ref<string | null>(null)
 const agentBridgeAvailable = computed(() => Boolean(bridge.agent))
+const showCompanionPanel = computed(() => syncBridgeAvailable.value || agentBridgeAvailable.value)
 const activeAgent = computed(() => agentSummaries.value.find((agent) => agent.isActive) ?? null)
 const sortedAgentSummaries = computed(() =>
   [...agentSummaries.value].sort((left, right) => {
@@ -142,6 +147,14 @@ const canSendToAgent = computed(() =>
   Boolean(activeAgent.value?.available)
   && agentActionPending.value === null
   && !dispatchInFlight.value)
+const automationsPanelLabel = computed(() =>
+  agentBridgeAvailable.value
+    ? messages.value.settings.manageAgents
+    : messages.value.settings.manageCompanion)
+const automationsPanelDescription = computed(() =>
+  agentBridgeAvailable.value
+    ? messages.value.settings.agentWorkspaceDescription
+    : messages.value.settings.companionWorkspaceDescription)
 const agentsAvailabilitySummaryLabel = computed(() => {
   if (hasAvailableAgent.value) {
     return messages.value.settings.availableOnMachine
@@ -616,6 +629,13 @@ watch(
   { flush: "post" },
 )
 
+watch(agentBridgeAvailable, (available) => {
+  if (available) return
+  if (settingsPage.value === "sessions") {
+    settingsPage.value = "automations"
+  }
+})
+
 onMounted(() => {
   unsubscribeAgent = bridge.agent?.subscribe((event) => {
     if (event.agents) {
@@ -707,7 +727,7 @@ function getMaxSettingsPanelHeight(): number {
       @keydown.enter.prevent="expanded = true" @keydown.space.prevent="expanded = true">
       <!-- Collapsed: icon + badge -->
       <div class="toggle-content" :class="expanded ? 'hidden' : 'visible'">
-        <IconListSparkle :size="24" />
+        <IconListSparkle :size="COLLAPSED_TOOL_ICON_SIZE" />
         <span v-if="hasAnnotations" class="badge" :class="{ entrance: showEntranceAnimation }"
           :style="{ backgroundColor: settings.annotationColor }">
           {{ count }}
@@ -720,16 +740,16 @@ function getMaxSettingsPanelHeight(): number {
           :title="isFrozen ? messages.toolbar.resume : messages.toolbar.pause"
           :aria-label="isFrozen ? messages.toolbar.resumeAria : messages.toolbar.pauseAria"
           :data-state="isFrozen ? 'paused' : undefined" @click.stop="toggleFreeze">
-          <IconPlay v-if="isFrozen" :size="24" />
-          <IconPause v-else :size="24" />
+          <IconPlay v-if="isFrozen" :size="PRIMARY_CONTROL_ICON_SIZE" />
+          <IconPause v-else :size="PRIMARY_CONTROL_ICON_SIZE" />
         </button>
 
         <button class="control-btn" :class="{ light: isLight }" type="button"
           :title="showMarkers ? messages.toolbar.hideMarkers : messages.toolbar.showMarkers"
           :aria-label="showMarkers ? messages.toolbar.hideMarkersAria : messages.toolbar.showMarkersAria"
           :data-state="showMarkers ? undefined : 'hidden'" :disabled="!hasAnnotations" @click.stop="toggleMarkers">
-          <IconEye v-if="showMarkers" :size="24" />
-          <IconEyeOff v-else :size="24" />
+          <IconEye v-if="showMarkers" :size="PRIMARY_CONTROL_ICON_SIZE" />
+          <IconEyeOff v-else :size="PRIMARY_CONTROL_ICON_SIZE" />
         </button>
 
         <button class="control-btn" :class="{ light: isLight }" type="button"
@@ -737,18 +757,18 @@ function getMaxSettingsPanelHeight(): number {
           :aria-label="isMarkdownFormat ? messages.toolbar.copyMarkdownAria : messages.toolbar.copyJsonAria"
           :disabled="!hasAnnotations" :data-active="copyFeedbackActive || undefined"
           @click.stop="void exportCurrentFormat()">
-          <IconCopyAnimated :size="24" :copied="copyFeedbackActive" />
+          <IconCopyAnimated :size="PRIMARY_CONTROL_ICON_SIZE" :copied="copyFeedbackActive" />
         </button>
 
         <button v-if="showToolbarSendButton" class="control-btn" :class="{ light: isLight }" type="button"
           :title="messages.toolbar.sendToAgent" :aria-label="messages.toolbar.sendToAgentAria"
           :disabled="!canSendToAgent" :data-active="dispatchInFlight || undefined" @click.stop="void sendToAgent()">
-          <IconPaperPlane :size="18" />
+          <IconPaperPlane :size="SECONDARY_CONTROL_ICON_SIZE" />
         </button>
 
         <button class="control-btn" :class="{ light: isLight }" type="button" :title="messages.toolbar.clearAll"
           :aria-label="messages.toolbar.clearAllAria" :disabled="!hasAnnotations" data-danger @click.stop="clearAll">
-          <IconTrashAlt :size="18" />
+          <IconTrashAlt :size="SECONDARY_CONTROL_ICON_SIZE" />
         </button>
 
         <div class="divider" :class="{ light: isLight }" />
@@ -756,12 +776,12 @@ function getMaxSettingsPanelHeight(): number {
         <button class="control-btn" :class="{ light: isLight }" type="button" :title="messages.toolbar.settings"
           :aria-label="messages.toolbar.toggleSettingsAria" :data-active="panelOpen || undefined"
           @click.stop="toggleSettingsPanel">
-          <IconGear :size="20" />
+          <IconGear :size="SECONDARY_CONTROL_ICON_SIZE" />
         </button>
 
         <button class="control-btn" :class="{ light: isLight }" type="button" :title="messages.toolbar.closeToolbar"
           :aria-label="messages.toolbar.closeToolbarAria" @click.stop="close">
-          <IconXmarkLarge :size="20" />
+          <IconXmarkLarge :size="SECONDARY_CONTROL_ICON_SIZE" />
         </button>
       </div>
 
@@ -912,11 +932,11 @@ function getMaxSettingsPanelHeight(): number {
                 </label>
               </div>
 
-              <div class="settings-section">
+              <div v-if="showCompanionPanel" class="settings-section">
                 <button class="nav-btn" :class="{ light: isLight }" type="button" @click="openAutomationsPanel">
                   <span class="nav-btn-left">
                     <IconConnectedNodes :size="18" />
-                    <span>{{ messages.settings.manageAgents }}</span>
+                    <span>{{ automationsPanelLabel }}</span>
                   </span>
                   <span class="nav-btn-right">
                     <span class="nav-status-indicator"
@@ -985,7 +1005,7 @@ function getMaxSettingsPanelHeight(): number {
               <div class="settings-header automations-header" :class="{ light: isLight }">
                 <button class="back-btn" :class="{ light: isLight }" type="button" @click="showMainSettings">
                   <IconChevronLeft :size="16" />
-                  <span>{{ messages.settings.manageAgents }}</span>
+                  <span>{{ automationsPanelLabel }}</span>
                 </button>
               </div>
 
@@ -999,11 +1019,11 @@ function getMaxSettingsPanelHeight(): number {
                   </span>
                 </div>
                 <p class="settings-description" :class="{ light: isLight }">
-                  {{ messages.settings.agentWorkspaceDescription }}
+                  {{ automationsPanelDescription }}
                 </p>
               </div>
 
-              <div class="settings-section">
+              <div v-if="agentBridgeAvailable" class="settings-section">
                 <div class="settings-row">
                   <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.currentAgent }}</span>
                   <span class="agent-inline-status" :class="{ light: isLight }">
@@ -1048,7 +1068,7 @@ function getMaxSettingsPanelHeight(): number {
                 </div>
               </div>
 
-              <div class="settings-section">
+              <div v-if="agentBridgeAvailable" class="settings-section">
                 <div class="settings-row">
                   <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentsConnection
                   }}</span>
@@ -1071,7 +1091,7 @@ function getMaxSettingsPanelHeight(): number {
                 </p>
               </div>
 
-              <div class="settings-section">
+              <div v-if="agentBridgeAvailable" class="settings-section">
                 <button class="nav-btn" :class="{ light: isLight }" type="button" @click="openAgentSessionsPanel">
                   <span class="nav-btn-left">
                     <IconClockList :size="18" />
@@ -1089,7 +1109,7 @@ function getMaxSettingsPanelHeight(): number {
                 </p>
               </div>
 
-              <div class="settings-section">
+              <div v-if="agentBridgeAvailable" class="settings-section">
                 <div class="settings-row">
                   <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentSelection }}</span>
                 </div>
@@ -1139,7 +1159,7 @@ function getMaxSettingsPanelHeight(): number {
                 </p>
               </div>
 
-              <div class="settings-section" v-if="latestAgentActivity">
+              <div class="settings-section" v-if="agentBridgeAvailable && latestAgentActivity">
                 <div class="settings-row">
                   <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentLastActivity
                   }}</span>
@@ -1170,61 +1190,63 @@ function getMaxSettingsPanelHeight(): number {
             </div>
 
             <div ref="sessionsSettingsPageRef" class="settings-page">
-              <div class="settings-header automations-header" :class="{ light: isLight }">
-                <button class="back-btn" :class="{ light: isLight }" type="button" @click="showAutomationsSettings">
-                  <IconChevronLeft :size="16" />
-                  <span>{{ messages.settings.agentSessions }}</span>
-                </button>
-              </div>
-
-              <div class="settings-section">
-                <div class="settings-row">
-                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentSessions }}</span>
-                  <button class="icon-action-btn" :class="{ light: isLight }" type="button"
-                    :title="messages.settings.refreshSessions" :aria-label="messages.settings.refreshSessions"
-                    :disabled="sessionActionPending !== null" @click="void refreshAgentSessions()">
-                    <IconRefresh :size="14" />
+              <template v-if="agentBridgeAvailable">
+                <div class="settings-header automations-header" :class="{ light: isLight }">
+                  <button class="back-btn" :class="{ light: isLight }" type="button" @click="showAutomationsSettings">
+                    <IconChevronLeft :size="16" />
+                    <span>{{ messages.settings.agentSessions }}</span>
                   </button>
                 </div>
-                <p class="settings-description" :class="{ light: isLight }">
-                  {{ messages.settings.agentSessionsDescription }}
-                </p>
-              </div>
 
-              <div class="settings-section">
-                <div v-if="sortedAgentSessions.length > 0" class="session-list">
-                  <div v-for="session in sortedAgentSessions" :key="session.id" class="session-card"
-                    :class="{ light: isLight }">
-                    <div class="session-card-main">
-                      <div class="session-card-title-row">
-                        <strong class="guide-card-title">{{ getSessionDisplayTitle(session) }}</strong>
-                        <span class="agent-pill" :class="[session.status, { light: isLight }]">
-                          {{ getSessionStatusLabel(session.status) }}
-                        </span>
-                      </div>
-                      <div class="session-card-meta" :class="{ light: isLight }">
-                        <span>{{ formatSessionTimestamp(session.updatedAt ?? session.createdAt) }}</span>
-                        <span>{{ messages.settings.sessionAnnotationCount(session.annotationCount) }}</span>
-                        <span v-if="getSessionAgentLabel(session)">{{ messages.settings.sessionAgentLabel }}: {{
-                          getSessionAgentLabel(session) }}</span>
-                      </div>
-                      <pre class="guide-code session-url" :class="{ light: isLight }">{{ session.url }}</pre>
-                    </div>
+                <div class="settings-section">
+                  <div class="settings-row">
+                    <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentSessions }}</span>
+                    <button class="icon-action-btn" :class="{ light: isLight }" type="button"
+                      :title="messages.settings.refreshSessions" :aria-label="messages.settings.refreshSessions"
+                      :disabled="sessionActionPending !== null" @click="void refreshAgentSessions()">
+                      <IconRefresh :size="14" />
+                    </button>
+                  </div>
+                  <p class="settings-description" :class="{ light: isLight }">
+                    {{ messages.settings.agentSessionsDescription }}
+                  </p>
+                </div>
 
-                    <div v-if="session.status !== 'closed'" class="session-card-actions">
-                      <button class="icon-action-btn" :class="{ light: isLight }"
-                        type="button" :title="messages.settings.closeSession"
-                        :aria-label="messages.settings.closeSession" :disabled="sessionActionPending !== null"
-                        @click="void closeAgentSession(session.id)">
-                        <IconClose :size="14" />
-                      </button>
+                <div class="settings-section">
+                  <div v-if="sortedAgentSessions.length > 0" class="session-list">
+                    <div v-for="session in sortedAgentSessions" :key="session.id" class="session-card"
+                      :class="{ light: isLight }">
+                      <div class="session-card-main">
+                        <div class="session-card-title-row">
+                          <strong class="guide-card-title">{{ getSessionDisplayTitle(session) }}</strong>
+                          <span class="agent-pill" :class="[session.status, { light: isLight }]">
+                            {{ getSessionStatusLabel(session.status) }}
+                          </span>
+                        </div>
+                        <div class="session-card-meta" :class="{ light: isLight }">
+                          <span>{{ formatSessionTimestamp(session.updatedAt ?? session.createdAt) }}</span>
+                          <span>{{ messages.settings.sessionAnnotationCount(session.annotationCount) }}</span>
+                          <span v-if="getSessionAgentLabel(session)">{{ messages.settings.sessionAgentLabel }}: {{
+                            getSessionAgentLabel(session) }}</span>
+                        </div>
+                        <pre class="guide-code session-url" :class="{ light: isLight }">{{ session.url }}</pre>
+                      </div>
+
+                      <div v-if="session.status !== 'closed'" class="session-card-actions">
+                        <button class="icon-action-btn" :class="{ light: isLight }"
+                          type="button" :title="messages.settings.closeSession"
+                          :aria-label="messages.settings.closeSession" :disabled="sessionActionPending !== null"
+                          @click="void closeAgentSession(session.id)">
+                          <IconClose :size="14" />
+                        </button>
+                      </div>
                     </div>
                   </div>
+                  <p v-else class="settings-description" :class="{ light: isLight }">
+                    {{ messages.settings.noAgentSessions }}
+                  </p>
                 </div>
-                <p v-else class="settings-description" :class="{ light: isLight }">
-                  {{ messages.settings.noAgentSessions }}
-                </p>
-              </div>
+              </template>
             </div>
           </div>
         </div>

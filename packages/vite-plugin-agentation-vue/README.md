@@ -38,7 +38,7 @@ The plugin automatically injects the annotation overlay in dev mode. It's disabl
 | `storagePrefix` | `string` | `"agentation-vue-"` | localStorage key prefix |
 | `outputDetail` | `"compact" \| "standard" \| "detailed" \| "forensic"` | `"standard"` | Level of detail in export output |
 | `sync` | `{ endpoint?: string, mcpEndpoint?: string, projectId?: string, autoSync?: boolean, debounceMs?: number, ensureServer?: boolean } \| false` | enabled in dev | Unified Agentation companion sync configuration |
-| `agent` | `{ enabled?: boolean, autoSend?: boolean } \| false` | enabled in dev, `autoSend` off | Local ACP companion bridge and auto-dispatch defaults |
+| `agent` | `{ enabled?: boolean, autoSend?: boolean } \| false` | disabled by default, `autoSend` off | Local ACP companion bridge and auto-dispatch defaults |
 | `inspector` | `"tracer"` | `"tracer"` | Source resolution strategy |
 
 ## Sync Configuration
@@ -73,8 +73,8 @@ plugin logs a warning and continues so you can start the server manually.
 
 ## Local Agent Bridge
 
-The local agent bridge is enabled by default in dev and uses the shared
-Agentation API as a companion process. Configure the UI default like this:
+The local agent bridge is disabled by default and uses the shared
+Agentation API as a companion process when enabled. Configure it like this:
 
 ```ts
 agentation({

@@ -16,8 +16,13 @@ class FakeChildProcess extends EventEmitter {
   constructor(
     readonly pid: number,
     private readonly onKill?: () => void,
+    private readonly recentStderr?: string,
   ) {
     super()
+  }
+
+  getRecentStderr() {
+    return this.recentStderr
   }
 }
 
@@ -146,12 +151,31 @@ describe("ensureSharedCompanionServer", () => {
     await registration.dispose()
     harness.cleanup()
   })
+
+  it("includes captured child stderr in shared companion failure logs", async () => {
+    const harness = createHarness({
+      waitReady: false,
+      recentStderr: "[HTTP] Server error: listen EPERM: operation not permitted 127.0.0.1:4748",
+    })
+
+    const registration = await harness.register("playgrounds/windows")
+
+    const startupLog = harness.findLog("shared companion still starting")
+    const exitLog = harness.findLog("shared companion exited")
+
+    expect(startupLog).toContain("child stderr: [HTTP] Server error: listen EPERM")
+    expect(exitLog).toContain("stderr=\"[HTTP] Server error: listen EPERM: operation not permitted 127.0.0.1:4748\"")
+
+    await registration.dispose()
+    harness.cleanup()
+  })
 })
 
 function createHarness(options?: {
   healthy?: boolean
   compatible?: boolean
   waitReady?: boolean
+  recentStderr?: string
 }) {
   const registryRootDir = mkdtempSync(join(tmpdir(), "agentation-shared-server-"))
   const logs: string[] = []
@@ -167,7 +191,7 @@ function createHarness(options?: {
     const child = new FakeChildProcess(++childPid, () => {
       healthy = false
       activeChildPids.delete(child.pid)
-    })
+    }, options?.recentStderr)
 
     activeChildPids.add(child.pid)
     healthy = true

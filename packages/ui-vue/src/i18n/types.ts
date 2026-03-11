@@ -83,7 +83,9 @@ export interface Messages {
     blockPageInteractions: string
     componentSource: string
     manageAgents: string
+    manageCompanion: string
     agentWorkspaceDescription: string
+    companionWorkspaceDescription: string
     companionStatus: string
     companionEndpointLabel: string
     mcpEndpointLabel: string

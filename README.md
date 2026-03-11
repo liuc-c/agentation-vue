@@ -176,6 +176,18 @@ agentation({
 `sync` is enabled by default during `vite dev`. If you do not want browser
 annotations to sync anywhere, set `sync: false`.
 
+The local agent bridge is disabled by default. If you want the toolbar to show
+local agent controls, enable it explicitly:
+
+```ts
+agentation({
+  agent: {
+    enabled: true,
+    autoSend: false,
+  },
+})
+```
+
 In shared-server mode, multiple local projects can point to the same
 companion endpoint. The Vite plugin health-checks that endpoint first and
 reuses the existing process when one is already running.
@@ -221,6 +233,7 @@ Recommended local setup:
 | `storagePrefix` | `string` | `"agentation-vue-"` | Prefix for persisted annotation data in storage. |
 | `outputDetail` | `"compact" \| "standard" \| "detailed" \| "forensic"` | `"standard"` | Controls how much metadata is included in exports. |
 | `sync` | `{ endpoint?: string, mcpEndpoint?: string, projectId?: string, autoSync?: boolean, debounceMs?: number, ensureServer?: boolean } \| false` | enabled in `serve` | Sends annotations to the unified Agentation companion. |
+| `agent` | `{ enabled?: boolean, autoSend?: boolean } \| false` | disabled by default | Enables the local agent bridge and agent UI on top of the shared companion. |
 | `inspector` | `"tracer"` | `"tracer"` | Source resolution strategy. Reserved for future alternatives. |
 
 ## Output Detail Levels

@@ -40,6 +40,7 @@ function makeProvides(options?: {
   showMarkers?: boolean
   copyFormat?: SettingsState["copyFormat"]
   sync?: boolean
+  agentBridge?: boolean
   agents?: Array<{
     id: string
     label: string
@@ -136,6 +137,10 @@ function makeProvides(options?: {
       enqueueDelete: vi.fn(),
       subscribe: vi.fn().mockReturnValue(() => {}),
       dispose: vi.fn(),
+    }
+
+    if (options?.agentBridge === false) {
+      return { store, selection, overlay, settings, i18n, freezeState, bridge }
     }
 
     const state = {
@@ -397,6 +402,33 @@ describe("Toolbar", () => {
 
     expect(wrapper.find('button[aria-label="Open agent workspace"]').exists()).toBe(false)
     expect(wrapper.find('button[aria-label="Toggle settings"]').exists()).toBe(true)
+  })
+
+  it("shows companion info without agent controls when no agent bridge is available", async () => {
+    const { wrapper } = mountToolbar({
+      sync: true,
+      agentBridge: false,
+    })
+
+    await expandToolbar(wrapper)
+    expect(wrapper.find('button[aria-label="Send pending annotations to the selected agent"]').exists()).toBe(false)
+    await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
+
+    const automationsButton = wrapper.findAll(".nav-btn").find(
+      (button) => button.text().includes("Companion & MCP"),
+    )
+    expect(automationsButton).toBeDefined()
+
+    await automationsButton!.trigger("click")
+    await flushUi()
+
+    expect(wrapper.text()).toContain("Companion & MCP")
+    expect(wrapper.text()).toContain("Companion status")
+    expect(wrapper.text()).toContain("Connected")
+    expect(wrapper.text()).toContain("http://localhost:4748")
+    expect(wrapper.text()).not.toContain("Auto-send to active agent")
+    expect(wrapper.text()).not.toContain("Agent sessions")
+    expect(wrapper.text()).not.toContain("No agent selected")
   })
 
   it("opens the agent workspace page from settings navigation", async () => {

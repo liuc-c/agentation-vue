@@ -31,7 +31,7 @@ export interface AgentationVueSyncOptions {
 }
 
 export interface AgentationVueAgentOptions {
-  /** Whether the agent companion UI and runtime bridge are enabled. */
+  /** Whether the agent companion UI and runtime bridge are enabled. Defaults to false. */
   enabled?: boolean
   /** Whether new or updated annotations auto-dispatch to the active agent. */
   autoSend?: boolean
@@ -79,7 +79,7 @@ export interface AgentationVueOptions {
   locale?: Locale
   /** Sync endpoint configuration for shared Agentation API/MCP workflow. Defaults on unless set to false. */
   sync?: AgentationVueSyncOptions | false
-  /** Local ACP companion bridge configuration. */
+  /** Local ACP companion bridge configuration. Disabled by default. */
   agent?: AgentationVueAgentOptions | false
   /** Inspector strategy (default: "tracer") — reserved for future alternatives */
   inspector?: "tracer"
@@ -130,7 +130,7 @@ export function resolveOptions(
   const configuredSync = raw.sync === false ? undefined : raw.sync
   const projectId = configuredSync?.projectId?.trim() || inferProjectIdFromRoot(rootDir)
   const configuredAgent = raw.agent === false ? { enabled: false, autoSend: false } : {
-    enabled: raw.agent?.enabled ?? command === "serve",
+    enabled: raw.agent?.enabled ?? false,
     autoSend: raw.agent?.autoSend ?? false,
   }
   const resolvedSyncEndpoint = configuredSync?.endpoint

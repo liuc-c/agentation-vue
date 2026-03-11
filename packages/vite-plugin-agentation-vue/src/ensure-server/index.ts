@@ -52,6 +52,7 @@ interface SharedCompanionChildHandle {
   pid?: number
   kill?(signal?: NodeJS.Signals | number): boolean
   once?(event: "error" | "exit", listener: (...args: any[]) => void): void
+  getRecentStderr?(): string | undefined
 }
 
 interface EnsureSharedServerDeps {
@@ -406,7 +407,7 @@ class SharedCompanionCoordinator implements SharedCompanionRegistration {
       if (!ready) {
         this.report(
           "shared companion still starting ⏳",
-          formatStartupFailureDetail(this.endpoint, child.pid),
+          formatStartupFailureDetail(this.endpoint, child.pid, child.getRecentStderr?.()),
           `starting:${this.endpoint}`,
         )
         return
@@ -451,7 +452,14 @@ class SharedCompanionCoordinator implements SharedCompanionRegistration {
 
       this.report(
         "shared companion exited ⚠️",
-        formatChildExitDetail(this.endpoint, this.instanceLabel, child.pid, code, signal),
+        formatChildExitDetail(
+          this.endpoint,
+          this.instanceLabel,
+          child.pid,
+          code,
+          signal,
+          child.getRecentStderr?.(),
+        ),
         `child-exit:${this.endpoint}`,
         true,
       )
@@ -576,6 +584,7 @@ function formatChildExitDetail(
   childPid: number | undefined,
   code: number | null,
   signal: NodeJS.Signals | null,
+  stderrSummary?: string,
 ): string {
   const details = [`${endpoint} startedBy=${instanceLabel}`]
 
@@ -588,6 +597,9 @@ function formatChildExitDetail(
   if (signal) {
     details.push(`signal=${String(signal)}`)
   }
+  if (stderrSummary) {
+    details.push(`stderr=${JSON.stringify(stderrSummary)}`)
+  }
 
   return details.join(" ")
 }
@@ -595,11 +607,15 @@ function formatChildExitDetail(
 function formatStartupFailureDetail(
   endpoint: string,
   childPid?: number,
+  stderrSummary?: string,
 ): string {
   const details = [`${endpoint} did not pass /health within ${STARTUP_TIMEOUT_MS}ms after auto-start`]
 
   if (childPid != null) {
     details.push(`childPid=${childPid}`)
+  }
+  if (stderrSummary) {
+    details.push(`child stderr: ${stderrSummary}`)
   }
 
   details.push("the child likely exited early, another process is bound to the port, or the configured loopback host resolves differently on this machine")
