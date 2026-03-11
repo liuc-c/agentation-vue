@@ -1050,7 +1050,7 @@ export class AgentManager {
       }, "dispatch.completed")
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      if (!activeRun) {
+      if (!activeRun || !runtime) {
         if (runtime) {
           runtime.status = "error"
           runtime.lastError = message
