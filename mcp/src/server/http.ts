@@ -198,6 +198,10 @@ function buildSessionSummary(session: Session): SessionSummary {
   }
 }
 
+function shouldExposeSessionSummary(session: SessionSummary): boolean {
+  return session.status !== "closed" || session.annotationCount > 0
+}
+
 async function proxyToCloud(
   req: IncomingMessage,
   res: ServerResponse,
@@ -423,6 +427,7 @@ const listSessionsHandler: RouteHandler = async (req, res) => {
 
   const sessions = filterSessionsByProject(listSessions(), projectFilter)
     .map(buildSessionSummary)
+    .filter(shouldExposeSessionSummary)
   sendJson(res, 200, sessions)
 }
 
@@ -878,7 +883,7 @@ const dispatchHandler = (port: number): RouteHandler => async (req, res) => {
       trigger: body.trigger,
       sessionId: body.sessionId?.trim() || undefined,
     })
-    sendJson(res, 200, {
+    sendJson(res, dispatch.state === "queued" || dispatch.state === "sending" ? 202 : 200, {
       projectId,
       agents: manager.listAgents(projectId),
       dispatch,

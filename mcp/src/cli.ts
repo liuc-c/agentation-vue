@@ -22,7 +22,7 @@ async function runAgentsInit() {
   console.log(`✓ Wrote agent catalog to ${getAgentConfigPath()}`);
   console.log(`  Snapshot source: ${catalog.snapshotSource ?? "embedded"}`);
   for (const agent of catalog.agents) {
-    console.log(`  - ${agent.label}: ${agent.available ? "available" : "missing"} (${agent.resolvedCommand})`);
+    console.log(`  - ${agent.label}: ${agent.availability} (${agent.resolvedCommand})`);
   }
 }
 
@@ -44,6 +44,7 @@ async function runAgentsList() {
       description: agent.description,
       homepage: agent.homepage,
       installHint: agent.installHint,
+      availability: agent.availability,
       available: agent.available,
       command: agent.resolvedCommand,
       status: agent.status,
@@ -67,10 +68,10 @@ async function runAgentsDoctor() {
   console.log();
 
   for (const agent of catalog.agents) {
-    const icon = agent.available ? "✓" : "○";
+    const icon = agent.available ? "✓" : agent.availability === "installable" ? "△" : "○";
     console.log(`${icon} ${agent.label} (${agent.kind})`);
     console.log(`  command: ${agent.resolvedCommand}`);
-    console.log(`  status: ${agent.available ? "available" : "missing"}`);
+    console.log(`  status: ${agent.availability}`);
     if (agent.installHint) {
       console.log(`  install: ${agent.installHint}`);
     }

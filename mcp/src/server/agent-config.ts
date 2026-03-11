@@ -7,6 +7,7 @@ import {
 
 export type AgentKind = string
 export type AgentStatus = "available" | "missing" | "connecting" | "ready" | "busy" | "error"
+export type AgentAvailability = "installed" | "installable" | "missing"
 
 export interface AgentEnvVar {
   name: string
@@ -53,6 +54,7 @@ export interface AgentConfigFile {
 }
 
 export interface ResolvedAgentConfig extends LocalAgentConfig {
+  availability: AgentAvailability
   available: boolean
   status: AgentStatus
   resolvedCommand: string
@@ -70,7 +72,6 @@ export interface AgentCatalog {
 
 const CONFIG_DIR = resolve(homedir(), ".agentation")
 const DEFAULT_CONFIG_PATH = resolve(CONFIG_DIR, "agents.json")
-
 export function getAgentConfigPath(): string {
   return process.env.AGENTATION_AGENT_CONFIG?.trim() || DEFAULT_CONFIG_PATH
 }
@@ -203,10 +204,14 @@ function mergeAgentConfig(
 function resolveConfigAgent(agent: LocalAgentConfig): ResolvedAgentConfig {
   const matchedCommand = resolveCommandPath(agent.command)
   const resolvedCommand = matchedCommand ?? agent.command
-  const available = agent.enabled && Boolean(matchedCommand || (isAbsolute(agent.command) && existsSync(agent.command)))
+  const available = agent.enabled && Boolean(
+    matchedCommand || (isAbsolute(agent.command) && existsSync(agent.command)),
+  )
+  const availability: AgentAvailability = available ? "installed" : "missing"
 
   return {
     ...agent,
+    availability,
     available,
     status: available ? "available" : "missing",
     resolvedCommand,

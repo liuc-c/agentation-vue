@@ -97,6 +97,7 @@ export interface Messages {
     currentAgent: string
     primaryAction: string
     availableOnMachine: string
+    installableOnMachine: string
     notInstalledOnMachine: string
     getStarted: string
     mcpConnection: string
@@ -113,6 +114,7 @@ export interface Messages {
     cancelSend: string
     connectAgent: string
     disconnectAgent: string
+    agentInstallPrerequisite: string
     activeAgent: string
     useAgent: string
     useAgentAria: (label: string) => string
@@ -120,6 +122,7 @@ export interface Messages {
     noAgentsAvailable: string
     agentStatusReady: string
     agentStatusAvailable: string
+    agentStatusInstallable: string
     agentStatusMissing: string
     agentStatusConnecting: string
     agentStatusBusy: string
@@ -137,11 +140,16 @@ export interface Messages {
     sessionUrlLabel: string
     sessionCreatedLabel: string
     sessionUpdatedLabel: string
+    sessionAgentLabel: string
     sessionAnnotationsLabel: string
     sessionAnnotationCount: (count: number) => string
+    sessionHandledCount: (count: number) => string
     sessionStatusActive: string
     sessionStatusApproved: string
     sessionStatusClosed: string
+    sessionDetailLoading: string
+    sessionDetailError: (message: string) => string
+    sessionNoAnnotations: string
     outputDetailHelp: string
     componentSourceHelp: string
     blockInteractionsHelp: string

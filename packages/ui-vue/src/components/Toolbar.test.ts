@@ -44,6 +44,7 @@ function makeProvides(options?: {
     id: string
     label: string
     kind: "claude" | "codex" | "gemini"
+    availability?: "installed" | "installable" | "missing"
     available: boolean
     status: "available" | "missing" | "connecting" | "ready" | "busy" | "error"
     isDefault?: boolean
@@ -143,6 +144,7 @@ function makeProvides(options?: {
         id: "claude",
         label: "Claude",
         kind: "claude" as const,
+        availability: "installed" as const,
         available: true,
         status: "ready" as const,
         isDefault: true,
@@ -155,6 +157,10 @@ function makeProvides(options?: {
         createdAt: "2026-03-10T00:00:00.000Z",
         updatedAt: "2026-03-10T00:10:00.000Z",
         projectId: "demo-app",
+        metadata: {
+          agentationLastAgentId: "claude",
+          agentationLastAgentLabel: "Claude",
+        },
         annotationCount: 2,
       }, {
         id: "sess-closed",
@@ -163,6 +169,10 @@ function makeProvides(options?: {
         createdAt: "2026-03-09T00:00:00.000Z",
         updatedAt: "2026-03-09T00:05:00.000Z",
         projectId: "demo-app",
+        metadata: {
+          agentationLastAgentId: "claude",
+          agentationLastAgentLabel: "Claude",
+        },
         annotationCount: 1,
       }],
       dispatch: undefined,
@@ -177,6 +187,56 @@ function makeProvides(options?: {
       listSessions: vi.fn().mockImplementation(async () => ({
         projectId: state.projectId,
         sessions: state.sessions,
+      })),
+      getSessionDetail: vi.fn().mockImplementation(async (sessionId: string) => ({
+        id: sessionId,
+        url: sessionId === "sess-active" ? "http://localhost:5173/" : "http://localhost:5173/checkout",
+        status: sessionId === "sess-active" ? "active" : "closed",
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:10:00.000Z",
+        projectId: "demo-app",
+        metadata: {
+          agentationLastAgentId: "claude",
+          agentationLastAgentLabel: "Claude",
+        },
+        annotations: [{
+          id: `${sessionId}-annotation-1`,
+          schemaVersion: 1 as const,
+          timestamp: "2026-03-10T00:00:00.000Z",
+          url: "http://localhost:5173/",
+          elementSelector: "button.primary",
+          comment: "Fix spacing",
+          status: "resolved" as const,
+          resolvedBy: "agent" as const,
+          source: {
+            framework: "vue" as const,
+            componentName: "HeroCard",
+            file: "src/components/HeroCard.vue",
+            line: 42,
+            resolver: "vue-tracer",
+          },
+          thread: [{
+            id: `${sessionId}-thread-1`,
+            role: "agent" as const,
+            content: "Adjusted button spacing.",
+            timestamp: "2026-03-10T00:05:00.000Z",
+          }],
+        }, {
+          id: `${sessionId}-annotation-2`,
+          schemaVersion: 1 as const,
+          timestamp: "2026-03-10T00:01:00.000Z",
+          url: "http://localhost:5173/",
+          elementSelector: ".hero-card",
+          comment: "Tighten vertical rhythm",
+          status: "pending" as const,
+          source: {
+            framework: "vue" as const,
+            componentName: "HeroCard",
+            file: "src/components/HeroCard.vue",
+            line: 30,
+            resolver: "vue-tracer",
+          },
+        }],
       })),
       selectAgent: vi.fn().mockImplementation(async (agentId: string) => {
         state.agents = state.agents.map((agent) => ({
@@ -468,6 +528,7 @@ describe("Toolbar", () => {
         id: "codex",
         label: "Codex",
         kind: "codex",
+        availability: "installed",
         available: true,
         status: "available",
         isDefault: true,
@@ -554,17 +615,60 @@ describe("Toolbar", () => {
     await flushUi()
 
     expect(wrapper.text()).toContain("localhost:5173")
-    expect(wrapper.text()).toContain("1 active / 2 total")
+    expect(wrapper.text()).toContain("1 open / 2 total")
 
-    const terminateButton = wrapper.findAll("button").find(
-      (button) => button.text().includes("Terminate"),
-    )
-    expect(terminateButton).toBeDefined()
-    await terminateButton!.trigger("click")
+    const viewButton = wrapper.find('button[aria-label="View"]')
+    expect(viewButton.exists()).toBe(true)
+    await viewButton.trigger("click")
+    await flushUi()
+
+    expect(bridge.agent?.getSessionDetail).toHaveBeenCalledWith("sess-active")
+    expect(wrapper.text()).toContain("1 handled")
+    expect(wrapper.text()).toContain("Agent: Claude")
+    expect(wrapper.text()).toContain("Fix spacing")
+    expect(wrapper.text()).toContain("Adjusted button spacing.")
+
+    const terminateButton = wrapper.find('button[aria-label="Terminate"]')
+    expect(terminateButton.exists()).toBe(true)
+    await terminateButton.trigger("click")
     await flushUi()
 
     expect(bridge.agent?.closeSession).toHaveBeenCalledWith("sess-active")
     expect(wrapper.text()).toContain("Closed")
+  })
+
+  it("shows a prerequisite hint when an agent is unavailable", async () => {
+    const { wrapper } = mountToolbar({
+      sync: true,
+      agents: [{
+        id: "codex",
+        label: "Codex",
+        kind: "codex",
+        availability: "missing",
+        available: false,
+        status: "missing",
+        isDefault: true,
+        isActive: false,
+      }],
+    })
+
+    await expandToolbar(wrapper)
+    await wrapper.find('button[aria-label="Toggle settings"]').trigger("click")
+    const automationsButton = wrapper.findAll(".nav-btn").find(
+      (button) => button.text().includes("Agent workspace"),
+    )
+    expect(automationsButton).toBeDefined()
+    await automationsButton!.trigger("click")
+    await flushUi()
+
+    expect(wrapper.text()).toContain("Install and sign in to the matching local agent CLI before sending work.")
+    expect(wrapper.text()).toContain("Missing")
+
+    const useButton = wrapper.findAll("button").find(
+      (button) => button.attributes("aria-label") === "Use Codex",
+    )
+    expect(useButton).toBeDefined()
+    expect(useButton!.attributes("disabled")).toBeDefined()
   })
 
   it("copies endpoint values from the MCP guide cards", async () => {

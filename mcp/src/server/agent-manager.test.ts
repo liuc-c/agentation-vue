@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => {
     listSessions: vi.fn(),
     getSession: vi.fn(),
     getPendingAnnotationsV2: vi.fn(),
+    updateSessionProjectId: vi.fn(),
     claimAnnotationV2: vi.fn(),
     releaseAnnotationV2: vi.fn(),
     requeueExpiredProcessingAnnotationsV2: vi.fn(),
@@ -38,6 +39,7 @@ vi.mock("./store.js", () => ({
   listSessions: mocks.listSessions,
   getSession: mocks.getSession,
   getPendingAnnotationsV2: mocks.getPendingAnnotationsV2,
+  updateSessionProjectId: mocks.updateSessionProjectId,
   claimAnnotationV2: mocks.claimAnnotationV2,
   releaseAnnotationV2: mocks.releaseAnnotationV2,
   requeueExpiredProcessingAnnotationsV2: mocks.requeueExpiredProcessingAnnotationsV2,
@@ -74,6 +76,7 @@ describe("AgentManager", () => {
         env: [],
         cwdStrategy: "projectRoot",
         mcpMode: "inherit-agentation-server",
+        availability: "installed",
         available: true,
         status: "available",
       }],
@@ -114,6 +117,7 @@ describe("AgentManager", () => {
         resolver: "vue-tracer",
       },
       status: "pending",
+      sessionId: "sess-1",
       metadata: {
         project_area: "/ :: HeroCard :: hero",
       },
@@ -133,6 +137,7 @@ describe("AgentManager", () => {
         resolver: "vue-tracer",
       },
       status: "processing",
+      sessionId: "sess-1",
       processingByAgentId: claim.agentId,
       processingByRunId: claim.runId,
       processingStartedAt: claim.processingStartedAt,
@@ -171,10 +176,45 @@ describe("AgentManager", () => {
     expect(agents).toHaveLength(1)
     expect(agents[0]).toMatchObject({
       id: "claude",
+      availability: "installed",
       isDefault: true,
       isActive: true,
       available: true,
     })
+  })
+
+  it("rejects selecting an agent whose entry command is missing", async () => {
+    mocks.loadAgentCatalog.mockReturnValueOnce({
+      configPath: "/tmp/agents.json",
+      defaultAgentId: undefined,
+      source: "snapshot",
+      snapshotSource: "embedded",
+      agents: [{
+        id: "codex-acp",
+        label: "Codex CLI",
+        kind: "codex",
+        enabled: true,
+        transport: "stdio",
+        command: "missing-codex-acp",
+        resolvedCommand: "missing-codex-acp",
+        args: ["-y", "@zed-industries/codex-acp@0.9.5"],
+        env: [],
+        cwdStrategy: "projectRoot",
+        mcpMode: "inherit-agentation-server",
+        availability: "missing",
+        available: false,
+        status: "missing",
+      }],
+    })
+
+    const { AgentManager } = await import("./agent-manager.js")
+    const manager = new AgentManager({
+      httpBaseUrl: "http://localhost:4748",
+    })
+
+    expect(() => manager.selectAgent("demo-app", "codex-acp")).toThrow(
+      "Agent is not available on this machine: codex-acp",
+    )
   })
 
   it("resolves the bundled CLI path from the dist directory layout", async () => {
@@ -209,27 +249,44 @@ describe("AgentManager", () => {
       trigger: "manual.send",
     })
 
+    expect(result).toMatchObject({
+      agentId: "claude",
+      state: "queued",
+    })
+    await vi.waitFor(() => {
+      expect(mocks.client.start).toHaveBeenCalledTimes(1)
+      expect(mocks.client.initialize).toHaveBeenCalledTimes(1)
+      expect(mocks.client.newSession).toHaveBeenCalledWith(
+        "/tmp/demo-app",
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "agentation",
+          }),
+        ]),
+      )
+      expect(mocks.client.prompt).toHaveBeenCalledWith(
+        "agent-session-1",
+        expect.stringContaining("Fix spacing"),
+      )
+    })
     expect(mocks.client.start).toHaveBeenCalledTimes(1)
     expect(mocks.client.initialize).toHaveBeenCalledTimes(1)
-    expect(mocks.client.newSession).toHaveBeenCalledWith(
-      "/tmp/demo-app",
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: "agentation",
-        }),
-      ]),
-    )
-    expect(mocks.client.prompt).toHaveBeenCalledWith(
-      "agent-session-1",
-      expect.stringContaining("Fix spacing"),
-    )
     expect(mocks.claimAnnotationV2).toHaveBeenCalledWith(
       "annotation-1",
       expect.objectContaining({
         agentId: "claude",
       }),
     )
-    expect(result).toMatchObject({
+    expect(mocks.updateSessionProjectId).toHaveBeenCalledWith(
+      "sess-1",
+      undefined,
+      expect.objectContaining({
+        agentationLastAgentId: "claude",
+        agentationLastAgentLabel: "Claude",
+        agentationLastAgentKind: "claude",
+      }),
+    )
+    expect(manager.getDispatchState("demo-app")).toMatchObject({
       agentId: "claude",
       state: "succeeded",
       claimedCount: 1,
@@ -256,14 +313,19 @@ describe("AgentManager", () => {
       trigger: "manual.send",
     })
 
-    expect(mocks.client.newSession).toHaveBeenCalledTimes(2)
-    expect(mocks.client.prompt).toHaveBeenCalledWith(
-      "agent-session-2",
-      expect.stringContaining("Fix spacing"),
-    )
     expect(result).toMatchObject({
-      state: "succeeded",
-      claimedCount: 1,
+      state: "queued",
+    })
+    await vi.waitFor(() => {
+      expect(mocks.client.newSession).toHaveBeenCalledTimes(2)
+      expect(mocks.client.prompt).toHaveBeenCalledWith(
+        "agent-session-2",
+        expect.stringContaining("Fix spacing"),
+      )
+      expect(manager.getDispatchState("demo-app")).toMatchObject({
+        state: "succeeded",
+        claimedCount: 1,
+      })
     })
   })
 
@@ -281,10 +343,15 @@ describe("AgentManager", () => {
       trigger: "manual.send",
     })
 
-    expect(mocks.client.prompt).not.toHaveBeenCalled()
     expect(result).toMatchObject({
-      state: "skipped",
-      claimedCount: 0,
+      state: "queued",
+    })
+    await vi.waitFor(() => {
+      expect(mocks.client.prompt).not.toHaveBeenCalled()
+      expect(manager.getDispatchState("demo-app")).toMatchObject({
+        state: "skipped",
+        claimedCount: 0,
+      })
     })
   })
 
@@ -302,13 +369,61 @@ describe("AgentManager", () => {
       trigger: "manual.send",
     })
 
-    expect(mocks.releaseAnnotationV2).toHaveBeenCalledWith("annotation-1", expect.objectContaining({
-      agentId: "claude",
-    }))
     expect(result).toMatchObject({
-      state: "failed",
-      claimedCount: 1,
-      message: "agent crashed",
+      state: "queued",
+    })
+    await vi.waitFor(() => {
+      expect(mocks.releaseAnnotationV2).toHaveBeenCalledWith("annotation-1", expect.objectContaining({
+        agentId: "claude",
+      }))
+      expect(manager.getDispatchState("demo-app")).toMatchObject({
+        state: "failed",
+        claimedCount: 1,
+        message: "agent crashed",
+      })
+    })
+  })
+
+  it("queues the next dispatch until the current run finishes", async () => {
+    let resolveFirstPrompt: (() => void) | undefined
+    const firstPrompt = new Promise((resolve) => {
+      resolveFirstPrompt = () => resolve({
+        stopReason: "completed",
+      })
+    })
+
+    mocks.client.prompt
+      .mockReturnValueOnce(firstPrompt)
+      .mockResolvedValueOnce({
+        stopReason: "completed",
+      })
+
+    const { AgentManager } = await import("./agent-manager.js")
+    const manager = new AgentManager({
+      httpBaseUrl: "http://localhost:4748",
+    })
+
+    const first = await manager.dispatch({
+      projectId: "demo-app",
+      mode: "manual",
+      trigger: "manual.send",
+    })
+    const second = await manager.dispatch({
+      projectId: "demo-app",
+      mode: "auto",
+      trigger: "annotation.upsert",
+    })
+
+    expect(first.state).toBe("queued")
+    expect(second.state).toBe("queued")
+    await vi.waitFor(() => {
+      expect(mocks.client.prompt).toHaveBeenCalledTimes(1)
+    })
+
+    resolveFirstPrompt?.()
+
+    await vi.waitFor(() => {
+      expect(mocks.client.prompt).toHaveBeenCalledTimes(2)
     })
   })
 })

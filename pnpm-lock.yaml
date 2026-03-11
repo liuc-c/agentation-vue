@@ -65,6 +65,9 @@ importers:
 
   packages/ui-vue:
     dependencies:
+      '@iconify-json/lucide':
+        specifier: ^1.2.96
+        version: 1.2.96
       '@iconify-json/vscode-icons':
         specifier: ^1.2.44
         version: 1.2.44
@@ -812,6 +815,9 @@ packages:
     engines: {node: '>=18.14.1'}
     peerDependencies:
       hono: ^4
+
+  '@iconify-json/lucide@1.2.96':
+    resolution: {integrity: sha512-EICTusj67lvSmEaH/Lhe68ZyzcgfcPNpY00exAOkoo+z2fnLeNy31mdE3E/4/q8WjzZrICAZDxY3d6j7LzkgNA==}
 
   '@iconify-json/vscode-icons@1.2.44':
     resolution: {integrity: sha512-3fLOIRRtsm6HD6UPJ3Y6/UztqxNTYgKA8VxrWeg1C+042MD3A/06CkWSsii1pz/f1zl0+YxvCHIVM3tXUlho+A==}
@@ -5256,6 +5262,10 @@ snapshots:
   '@hono/node-server@1.19.9(hono@4.11.7)':
     dependencies:
       hono: 4.11.7
+
+  '@iconify-json/lucide@1.2.96':
+    dependencies:
+      '@iconify/types': 2.0.0
 
   '@iconify-json/vscode-icons@1.2.44':
     dependencies:

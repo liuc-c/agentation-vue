@@ -1,4 +1,5 @@
 import type {
+  AgentSessionDetail,
   AgentSessionSummary,
   RuntimeAgentBridge,
   RuntimeAgentEvent,
@@ -14,20 +15,28 @@ interface AgentSessionsResponse extends RuntimeAgentSessionsState {
   projectId?: string
 }
 
+function isVisibleSession(session: AgentSessionSummary): boolean {
+  return session.status !== "closed" || session.annotationCount > 0
+}
+
 function normalizeSessionsResponse(
   state: AgentSessionsResponse | AgentSessionSummary[],
   projectId?: string,
 ): RuntimeAgentSessionsState {
+  const sessions = Array.isArray(state)
+    ? state
+    : state.sessions ?? []
+
   if (Array.isArray(state)) {
     return {
       projectId,
-      sessions: state,
+      sessions: sessions.filter(isVisibleSession),
     }
   }
 
   return {
     projectId: state.projectId ?? projectId,
-    sessions: state.sessions ?? [],
+    sessions: sessions.filter(isVisibleSession),
   }
 }
 
@@ -184,10 +193,22 @@ export function createRuntimeAgentBridge(input: {
         })
       }
     }
-    source.addEventListener("list", onEvent as EventListener)
-    source.addEventListener("status", onEvent as EventListener)
-    source.addEventListener("dispatch", onEvent as EventListener)
-    source.addEventListener("agent-error", onEvent as EventListener)
+    for (const eventName of [
+      "list",
+      "status",
+      "dispatch",
+      "dispatch.queued",
+      "dispatch.started",
+      "dispatch.progress",
+      "dispatch.annotation.completed",
+      "dispatch.completed",
+      "dispatch.failed",
+      "dispatch.cancelled",
+      "dispatch.skipped",
+      "agent-error",
+    ]) {
+      source.addEventListener(eventName, onEvent as EventListener)
+    }
     source.onerror = () => {
       if (source.readyState === EventSource.CLOSED && eventSource === source) {
         eventSource = null
@@ -205,23 +226,36 @@ export function createRuntimeAgentBridge(input: {
       ensureEventSource()
 
       const storedAgentId = loadStoredAgentId(projectId)
+      const initialState = await refresh()
+      const selectableAgentIds = new Set(
+        initialState.agents
+          .filter((agent) => agent.available)
+          .map((agent) => agent.id),
+      )
+      const activeAgentId = initialState.agents.find((agent) => agent.isActive && agent.available)?.id
+      if (activeAgentId) {
+        saveStoredAgentId(projectId, activeAgentId)
+      }
       const candidateAgentIds = [...new Set([
-        storedAgentId,
         selectedAgentId,
+        storedAgentId,
       ].filter((value): value is string => Boolean(value?.trim())))]
 
       for (const agentId of candidateAgentIds) {
-        try {
-          await this.selectAgent(agentId)
-          break
-        } catch {
+        if (!selectableAgentIds.has(agentId)) {
           if (agentId === storedAgentId) {
             clearStoredAgentId(projectId)
           }
+          continue
         }
-      }
 
-      await refresh()
+        if (agentId === activeAgentId) {
+          return
+        }
+
+        await this.selectAgent(agentId)
+        return
+      }
     },
 
     setAutoMode(enabled) {
@@ -237,6 +271,11 @@ export function createRuntimeAgentBridge(input: {
 
     listSessions() {
       return refreshSessions()
+    },
+
+    async getSessionDetail(sessionId) {
+      const response = await fetch(`${endpoint}/v2/sessions/${encodeURIComponent(sessionId)}`)
+      return parseJson<AgentSessionDetail>(response)
     },
 
     async selectAgent(agentId) {

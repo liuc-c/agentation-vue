@@ -20,7 +20,7 @@ onUnmounted(() => {
   <main class="app">
     <header class="hero">
       <p class="eyebrow">Agentation Vue</p>
-      <h1>Phase 5 — Codex Verified</h1>
+      <h1>Phase 6 — Codex Verified</h1>
       <p class="subtitle">
         Click any element to annotate it. Hover to see the highlight.
         Use the toolbar (bottom-right) to export, open settings, or toggle annotation mode.
@@ -32,7 +32,7 @@ onUnmounted(() => {
       description="Each card is a nested component. Click any element to create an annotation."
     />
 
-    <section class="demo-section">
+    <section class="demo-section demo-section-highlight">
       <h2>Animation pause demo</h2>
       <p>Use the pause button or press <code>P</code> to freeze all animations.</p>
 
@@ -120,7 +120,8 @@ code {
 
 h1 {
   margin: 0;
-  font-size: clamp(2.4rem, 4vw, 3.6rem);
+  color: inherit;
+  font-size: clamp(2.1rem, 3.6vw, 3.1rem);
   line-height: 1.05;
 }
 
@@ -138,6 +139,10 @@ h1 {
   border: 1px solid rgba(148, 163, 184, 0.15);
   border-radius: 12px;
   background: rgba(30, 41, 59, 0.5);
+}
+
+.demo-section-highlight {
+  background: rgba(220, 38, 38, 0.35);
 }
 
 .demo-section h2 {

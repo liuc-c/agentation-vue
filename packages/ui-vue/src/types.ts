@@ -1,6 +1,7 @@
 import type {
   AnnotationV2,
   OutputDetailLevel,
+  SessionWithAnnotations,
   SourceLocation,
   StorageOptions,
 } from "@liuovo/agentation-vue-core"
@@ -29,6 +30,7 @@ export interface RuntimeSyncEvent {
 
 export type AgentKind = string
 export type AgentStatus = "available" | "missing" | "connecting" | "ready" | "busy" | "error"
+export type AgentAvailability = "installed" | "installable" | "missing"
 export type AgentSessionStatus = "active" | "approved" | "closed"
 
 export interface AgentSummary {
@@ -39,6 +41,7 @@ export interface AgentSummary {
   description?: string
   homepage?: string
   installHint?: string
+  availability: AgentAvailability
   available: boolean
   status: AgentStatus
   isDefault: boolean
@@ -52,8 +55,11 @@ export interface AgentDispatchState {
   runId?: string
   mode: "auto" | "manual"
   trigger: "annotation.upsert" | "manual.send"
-  state: "idle" | "sending" | "succeeded" | "failed" | "cancelled" | "skipped"
+  state: "idle" | "queued" | "sending" | "succeeded" | "failed" | "cancelled" | "skipped"
   claimedCount?: number
+  completedCount?: number
+  queuePosition?: number
+  currentAnnotationId?: string
   message?: string
   updatedAt: string
 }
@@ -65,8 +71,11 @@ export interface AgentSessionSummary {
   createdAt: string
   updatedAt?: string
   projectId?: string
+  metadata?: Record<string, unknown>
   annotationCount: number
 }
+
+export type AgentSessionDetail = SessionWithAnnotations
 
 export interface RuntimeAgentState {
   projectId?: string
@@ -80,7 +89,19 @@ export interface RuntimeAgentSessionsState {
 }
 
 export interface RuntimeAgentEvent {
-  type: "list" | "status" | "dispatch" | "error"
+  type:
+    | "list"
+    | "status"
+    | "dispatch"
+    | "dispatch.queued"
+    | "dispatch.started"
+    | "dispatch.progress"
+    | "dispatch.annotation.completed"
+    | "dispatch.completed"
+    | "dispatch.failed"
+    | "dispatch.cancelled"
+    | "dispatch.skipped"
+    | "error"
   projectId?: string
   agents?: AgentSummary[]
   agent?: AgentSummary
@@ -95,6 +116,7 @@ export interface RuntimeAgentBridge {
   setAutoMode(enabled: boolean): void
   listAgents(): Promise<RuntimeAgentState>
   listSessions(): Promise<RuntimeAgentSessionsState>
+  getSessionDetail(sessionId: string): Promise<AgentSessionDetail>
   selectAgent(agentId: string): Promise<RuntimeAgentState>
   connect(agentId?: string): Promise<RuntimeAgentState>
   disconnect(agentId?: string): Promise<RuntimeAgentState>

@@ -73,13 +73,14 @@ const cards = [
 
 h2 {
   margin: 0;
+  color: #ef4444;
   font-size: 1.5rem;
 }
 
 .description {
   max-width: 420px;
   margin: 0;
-  color: #cbd5e1;
+  color: #22c55e;
   line-height: 1.65;
 }
 

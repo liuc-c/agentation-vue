@@ -21,7 +21,7 @@ import {
 } from "../injection-keys.js"
 import { injectStrict } from "../utils.js"
 import { originalSetTimeout } from "../composables/useFreezeState.js"
-import { IconTrashAlt } from "./icons.js"
+import { IconChevronRight, IconTrashAlt } from "./icons.js"
 
 const store = injectStrict(ANNOTATIONS_STORE_KEY, "annotations store")
 const selection = injectStrict(SELECTION_KEY, "selection state")
@@ -318,23 +318,9 @@ function getAnnotationComputedStyles(annotation: AnnotationV2): Record<string, s
           :aria-expanded="stylesExpanded"
           @click="stylesExpanded = !stylesExpanded"
         >
-          <svg
-            class="chevron"
-            :class="{ expanded: stylesExpanded }"
-            width="14"
-            height="14"
-            viewBox="0 0 14 14"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <path
-              d="M5.5 10.25L9 7.25L5.75 4"
-              stroke="currentColor"
-              stroke-width="1.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
+          <span class="chevron" :class="{ expanded: stylesExpanded }">
+            <IconChevronRight :size="14" />
+          </span>
           <span class="element-name">{{ displayName }}</span>
         </button>
 
@@ -440,8 +426,6 @@ function getAnnotationComputedStyles(annotation: AnnotationV2): Record<string, s
 </template>
 
 <style scoped>
-:deep(svg[fill="none"]) { fill: none !important; }
-
 @keyframes popoverShake {
   0%, 100% { transform: scale(1) translateX(0); }
   20% { transform: scale(1) translateX(-3px); }
@@ -518,6 +502,18 @@ function getAnnotationComputedStyles(annotation: AnnotationV2): Record<string, s
   color: inherit;
   cursor: pointer;
   text-align: left;
+}
+
+.chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  transition: transform 0.18s ease;
+}
+
+.chevron.expanded {
+  transform: rotate(90deg);
 }
 
 .element-name {

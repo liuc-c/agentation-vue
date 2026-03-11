@@ -124,24 +124,26 @@ onMounted(() => {
       return
     }
 
-    if (event.type === "dispatch" && event.dispatch?.message) {
-      const state = event.dispatch.state
-      if (state === "failed") {
-        props.bridge.notify?.({
-          kind: "warning",
-          duration: 3000,
-          message: i18n.messages.notifications.agentDispatchFailed(event.dispatch.message),
-        })
-        return
-      }
+    if (!event.dispatch?.message) {
+      return
+    }
 
-      if (state === "succeeded") {
-        props.bridge.notify?.({
-          kind: "info",
-          duration: 2200,
-          message: i18n.messages.notifications.agentDispatchSucceeded(event.dispatch.message),
-        })
-      }
+    const state = event.dispatch.state
+    if (state === "failed") {
+      props.bridge.notify?.({
+        kind: "warning",
+        duration: 3000,
+        message: i18n.messages.notifications.agentDispatchFailed(event.dispatch.message),
+      })
+      return
+    }
+
+    if (state === "succeeded" && event.type === "dispatch.completed") {
+      props.bridge.notify?.({
+        kind: "info",
+        duration: 2200,
+        message: i18n.messages.notifications.agentDispatchSucceeded(event.dispatch.message),
+      })
     }
   }) ?? null
 })

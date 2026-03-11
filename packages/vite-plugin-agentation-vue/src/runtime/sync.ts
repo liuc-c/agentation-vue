@@ -3,6 +3,7 @@ import {
   createSession as apiCreateSession,
   deleteAnnotation as apiDeleteAnnotation,
   getSession as apiGetSession,
+  listSessions as apiListSessions,
   markAnnotationsSynced,
   getUnsyncedAnnotations,
   loadSessionId,
@@ -55,6 +56,7 @@ export function createRuntimeSyncBridge(
   let eventSource: EventSource | null = null
   let pathWatchTimer: ReturnType<typeof setInterval> | undefined
   const closedSessionIds = new Set<string>()
+  let lastPrunedScope: string | null = null
 
   function emit(event: RuntimeSyncEvent): void {
     for (const listener of listeners) {
@@ -67,12 +69,101 @@ export function createRuntimeSyncBridge(
     eventSource = null
   }
 
+  function hasOpenAnnotations(
+    annotations: AnnotationV2[],
+  ): boolean {
+    return annotations.some((annotation) => {
+      const status = annotation.status ?? "pending"
+      return status === "pending" || status === "acknowledged" || status === "processing"
+    })
+  }
+
+  async function pruneInactiveProjectSessions(currentSessionId?: string): Promise<void> {
+    if (!desiredProjectId) {
+      return
+    }
+
+    const pruneScope = currentSessionId?.trim() || "__project__"
+    if (lastPrunedScope === pruneScope) {
+      return
+    }
+
+    lastPrunedScope = pruneScope
+
+    try {
+      const sessions = await apiListSessions(sync.endpoint, desiredProjectId)
+      const staleSessions = sessions.filter((session) =>
+        session.id !== currentSessionId && session.status === "active",
+      )
+
+      for (const session of staleSessions) {
+        try {
+          const detail = await apiGetSession(sync.endpoint, session.id)
+          if (hasOpenAnnotations(detail.annotations)) {
+            continue
+          }
+
+          await apiUpdateSession(sync.endpoint, session.id, {
+            status: "closed",
+          })
+          closedSessionIds.add(session.id)
+        } catch (err) {
+          console.warn("[agentation] Failed to close stale session:", session.id, err)
+        }
+      }
+    } catch (err) {
+      console.warn("[agentation] Failed to list project sessions for cleanup:", err)
+    }
+  }
+
+  function shouldIgnoreKeepaliveCloseError(error: unknown, keepalive: boolean): boolean {
+    if (!keepalive) {
+      return false
+    }
+
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return true
+    }
+
+    return error instanceof TypeError
+      && /failed to fetch/i.test(error.message)
+  }
+
+  async function closeCurrentSession(keepalive = false): Promise<void> {
+    const sid = sessionId?.trim()
+    if (!sid || closedSessionIds.has(sid)) {
+      return
+    }
+
+    const path = currentPathname
+    closedSessionIds.add(sid)
+    clearSessionId(path, storage.options)
+    stopEventSource()
+    sessionId = undefined
+    sessionVerified = false
+    lastPrunedScope = null
+
+    try {
+      await apiUpdateSession(sync.endpoint, sid, {
+        status: "closed",
+      }, {
+        keepalive,
+      })
+    } catch (err) {
+      if (shouldIgnoreKeepaliveCloseError(err, keepalive)) {
+        return
+      }
+      console.warn("[agentation] Failed to close current session:", sid, err)
+    }
+  }
+
   async function ensureExistingSession(
     sid: string,
     path = currentPathname,
   ): Promise<boolean> {
     if (sessionVerified) {
       ensureEventSource(sid)
+      await pruneInactiveProjectSessions(sid)
       return true
     }
 
@@ -112,6 +203,7 @@ export function createRuntimeSyncBridge(
       }
 
       ensureEventSource(sid)
+      await pruneInactiveProjectSessions(sid)
       return true
     } catch (err) {
       if (err instanceof Error && err.message.includes("404")) {
@@ -125,6 +217,7 @@ export function createRuntimeSyncBridge(
       console.warn("[agentation] Failed to verify existing session:", sid, err)
       sessionVerified = true
       ensureEventSource(sid)
+      await pruneInactiveProjectSessions(sid)
       return true
     }
   }
@@ -196,6 +289,7 @@ export function createRuntimeSyncBridge(
     stopEventSource()
     sessionId = loadSessionId(current, storage.options) ?? undefined
     sessionVerified = false
+    lastPrunedScope = null
 
     if (sessionId) {
       const sid = sessionId
@@ -225,8 +319,10 @@ export function createRuntimeSyncBridge(
       )
       sessionId = session.id
       sessionVerified = true
+      lastPrunedScope = null
       saveSessionId(pathname(), session.id, storage.options)
       ensureEventSource(session.id)
+      await pruneInactiveProjectSessions(session.id)
       return session.id
     } catch (err) {
       console.warn("[agentation] Failed to create session:", err)
@@ -241,9 +337,25 @@ export function createRuntimeSyncBridge(
     }
 
     flushInFlight = (async () => {
-      const sid = await ensureSession()
+      handlePathChange()
+
+      let sid = sessionId?.trim()
+      if (sid) {
+        const ready = await ensureExistingSession(sid)
+        sid = ready && sessionId ? sessionId : undefined
+      }
+
       const pending = (getUnsyncedAnnotations(pathname(), sid, storage.options) as StoredAnnotation[])
         .filter((annotation) => !annotation._syncedTo || !closedSessionIds.has(annotation._syncedTo))
+
+      if (!sid && pending.length === 0) {
+        await pruneInactiveProjectSessions()
+        return
+      }
+
+      if (!sid) {
+        sid = await ensureSession()
+      }
 
       if (pending.length === 0) {
         await reconcileFromServer(sid, "init")
@@ -329,6 +441,8 @@ export function createRuntimeSyncBridge(
       if (sync.autoSync === false) return Promise.resolve()
 
       pathWatchTimer = pathWatchTimer ?? setInterval(handlePathChange, 500)
+      window.removeEventListener("pagehide", onPageHide)
+      window.addEventListener("pagehide", onPageHide)
       return flush()
     },
 
@@ -355,6 +469,7 @@ export function createRuntimeSyncBridge(
     },
 
     dispose() {
+      window.removeEventListener("pagehide", onPageHide)
       stopEventSource()
       if (flushTimer != null) {
         clearTimeout(flushTimer)
@@ -366,5 +481,9 @@ export function createRuntimeSyncBridge(
       }
       listeners.clear()
     },
+  }
+
+  function onPageHide(): void {
+    void closeCurrentSession(true)
   }
 }

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import {
   filterSessionsByProject,
 } from "./project-scope.js";
+import { eventBus } from "./events.js";
 import {
   claimAnnotationV2,
   releaseAnnotationV2,
@@ -12,9 +13,11 @@ import {
   getPendingAnnotationsV2,
   getSession,
   listSessions,
+  updateSessionProjectId,
 } from "./store.js";
 import {
   loadAgentCatalog,
+  type AgentAvailability,
   type AgentCatalog,
   type AgentKind,
   type AgentStatus,
@@ -35,6 +38,7 @@ export interface AgentSummary {
   description?: string
   homepage?: string
   installHint?: string
+  availability: AgentAvailability
   available: boolean
   status: AgentStatus
   isDefault: boolean
@@ -48,14 +52,29 @@ export interface AgentDispatchState {
   runId?: string;
   mode: "auto" | "manual";
   trigger: "annotation.upsert" | "manual.send";
-  state: "idle" | "sending" | "succeeded" | "failed" | "cancelled" | "skipped";
+  state: "idle" | "queued" | "sending" | "succeeded" | "failed" | "cancelled" | "skipped";
   claimedCount?: number;
+  completedCount?: number;
+  queuePosition?: number;
+  currentAnnotationId?: string;
   message?: string;
   updatedAt: string;
 }
 
 export interface AgentEvent {
-  type: "list" | "status" | "dispatch" | "error";
+  type:
+    | "list"
+    | "status"
+    | "dispatch"
+    | "dispatch.queued"
+    | "dispatch.started"
+    | "dispatch.progress"
+    | "dispatch.annotation.completed"
+    | "dispatch.completed"
+    | "dispatch.failed"
+    | "dispatch.cancelled"
+    | "dispatch.skipped"
+    | "error";
   projectId?: string;
   agents?: AgentSummary[];
   agent?: AgentSummary;
@@ -79,14 +98,28 @@ interface AgentRuntime {
   status: AgentStatus
   lastError?: string
   lastAgentText?: string
+  lastProgressMessage?: string
   disposeUpdateSubscription?: () => void
 }
 
-interface PendingDispatchRun {
+interface DispatchRequest {
   runId: string
+  projectId: string
   agentId: string
+  mode: "auto" | "manual"
+  trigger: "annotation.upsert" | "manual.send"
+  sessionIds?: string[]
+}
+
+interface QueuedDispatchRun extends DispatchRequest {
+  queuedAt: string
+}
+
+interface PendingDispatchRun extends DispatchRequest {
   annotationIds: string[]
+  completedAnnotationIds: Set<string>
   cancelRequested: boolean
+  currentAnnotationId?: string
 }
 
 const PROCESSING_TTL_SECONDS = 600
@@ -98,6 +131,22 @@ function nowIso(): string {
 function truncateMessage(value: string | undefined, limit = 280): string | undefined {
   if (!value) return undefined;
   return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
+}
+
+function normalizeSessionIds(sessionId?: string): string[] | undefined {
+  const trimmed = sessionId?.trim()
+  return trimmed ? [trimmed] : undefined
+}
+
+function mergeSessionIds(
+  current?: string[],
+  incoming?: string[],
+): string[] | undefined {
+  if (!current || !incoming) {
+    return undefined
+  }
+
+  return [...new Set([...current, ...incoming])]
 }
 
 function getProjectRootFromSession(session: Session | undefined): string | undefined {
@@ -112,6 +161,19 @@ function getProjectRootFromSession(session: Session | undefined): string | undef
 
 function isDispatchableSession(session: Pick<Session, "status">): boolean {
   return session.status !== "closed";
+}
+
+function buildSessionAgentMetadata(
+  config: Pick<ResolvedAgentConfig, "id" | "label" | "kind">,
+  runId: string,
+): Record<string, unknown> {
+  return {
+    agentationLastAgentId: config.id,
+    agentationLastAgentLabel: config.label,
+    agentationLastAgentKind: config.kind,
+    agentationLastRunId: runId,
+    agentationLastAgentAt: nowIso(),
+  };
 }
 
 export function resolveMcpCliPath(options: {
@@ -204,9 +266,11 @@ function buildPrompt(input: {
     "Recommended workflow:",
     "1. These annotations are already claimed for this run and marked as processing.",
     "2. Read the relevant context with agentation_v2_get_session if you need more detail.",
-    "3. Make the requested code changes in the project working directory.",
-    "4. Resolve each annotation with a short summary when done.",
-    "5. If you abandon an item, release or dismiss it instead of leaving it processing.",
+    "3. Work through the claimed annotations one by one instead of batching them loosely.",
+    "4. Make the requested code changes in the project working directory.",
+    "5. As soon as you finish one annotation, call agentation_v2_resolve with a short summary before moving on.",
+    "6. If an item is invalid, blocked, or out of scope, call dismiss or release it before ending the turn.",
+    "7. Do not leave claimed annotations in processing when you finish the turn.",
     "",
     `Project: ${input.projectId}`,
     `Agent: ${input.agentId}`,
@@ -233,7 +297,9 @@ export class AgentManager {
   private readonly activeAgentByProject = new Map<string, string>();
   private readonly runtimes = new Map<string, AgentRuntime>();
   private readonly dispatchStateByProject = new Map<string, AgentDispatchState>();
+  private readonly dispatchQueueByProject = new Map<string, QueuedDispatchRun[]>();
   private readonly activeDispatchRunByProject = new Map<string, PendingDispatchRun>();
+  private readonly drainingProjects = new Set<string>();
 
   private catalog: AgentCatalog | null = null;
 
@@ -294,6 +360,7 @@ export class AgentManager {
       description: config.description,
       homepage: config.homepage,
       installHint: config.installHint,
+      availability: config.availability,
       available: config.available,
       status,
       isDefault: config.id === catalog.defaultAgentId,
@@ -325,6 +392,66 @@ export class AgentManager {
     return this.dispatchStateByProject.get(projectId);
   }
 
+  private getDispatchQueue(projectId: string): QueuedDispatchRun[] {
+    return this.dispatchQueueByProject.get(projectId) ?? []
+  }
+
+  private setDispatchQueue(projectId: string, queue: QueuedDispatchRun[]): void {
+    if (queue.length === 0) {
+      this.dispatchQueueByProject.delete(projectId)
+      return
+    }
+
+    this.dispatchQueueByProject.set(projectId, queue)
+  }
+
+  private queueDispatch(run: QueuedDispatchRun): { run: QueuedDispatchRun; merged: boolean; queuePosition: number } {
+    const queue = [...this.getDispatchQueue(run.projectId)]
+
+    if (run.mode === "auto") {
+      for (let index = queue.length - 1; index >= 0; index -= 1) {
+        const queued = queue[index]
+        if (queued.mode !== "auto") continue
+        queued.sessionIds = mergeSessionIds(queued.sessionIds, run.sessionIds)
+        this.setDispatchQueue(run.projectId, queue)
+        return {
+          run: queued,
+          merged: true,
+          queuePosition: index + 1,
+        }
+      }
+    }
+
+    if (run.mode === "manual") {
+      const firstAutoIndex = queue.findIndex((entry) => entry.mode === "auto")
+      if (firstAutoIndex === -1) {
+        queue.push(run)
+      } else {
+        queue.splice(firstAutoIndex, 0, run)
+      }
+    } else {
+      queue.push(run)
+    }
+
+    this.setDispatchQueue(run.projectId, queue)
+    return {
+      run,
+      merged: false,
+      queuePosition: queue.findIndex((entry) => entry.runId === run.runId) + 1,
+    }
+  }
+
+  private dequeueDispatch(projectId: string): QueuedDispatchRun | undefined {
+    const queue = [...this.getDispatchQueue(projectId)]
+    const next = queue.shift()
+    this.setDispatchQueue(projectId, queue)
+    return next
+  }
+
+  private getNextQueuedDispatch(projectId: string): QueuedDispatchRun | undefined {
+    return this.getDispatchQueue(projectId)[0]
+  }
+
   private releaseClaimedAnnotations(
     annotationIds: string[],
     owner: { agentId: string; runId: string },
@@ -338,10 +465,10 @@ export class AgentManager {
     projectId: string,
     agentId: string,
     runId: string,
-    sessionId?: string,
+    sessionIds?: string[],
   ): AnnotationV2[] {
     requeueExpiredProcessingAnnotationsV2();
-    const candidates = this.collectPendingAnnotations(projectId, sessionId);
+    const candidates = this.collectPendingAnnotations(projectId, sessionIds);
     const startedAt = nowIso();
     const expiresAt = new Date(Date.now() + PROCESSING_TTL_SECONDS * 1000).toISOString();
     const claimed: AnnotationV2[] = [];
@@ -364,6 +491,7 @@ export class AgentManager {
   private updateDispatchState(
     projectId: string,
     state: Omit<AgentDispatchState, "projectId" | "updatedAt">,
+    eventType: AgentEvent["type"] = "dispatch",
   ): AgentDispatchState {
     const next: AgentDispatchState = {
       projectId,
@@ -372,11 +500,154 @@ export class AgentManager {
     };
     this.dispatchStateByProject.set(projectId, next);
     this.emit({
-      type: "dispatch",
+      type: eventType,
       projectId,
       dispatch: next,
     });
     return next;
+  }
+
+  private emitRuntimeProgress(projectId: string, runtime: AgentRuntime): void {
+    const activeRun = this.activeDispatchRunByProject.get(projectId)
+    if (!activeRun || activeRun.agentId !== runtime.config.id || activeRun.cancelRequested) {
+      return
+    }
+
+    const message = truncateMessage(runtime.lastAgentText)
+    if (!message || runtime.lastProgressMessage === message) {
+      return
+    }
+
+    runtime.lastProgressMessage = message
+    this.updateDispatchState(projectId, {
+      agentId: activeRun.agentId,
+      runId: activeRun.runId,
+      mode: activeRun.mode,
+      trigger: activeRun.trigger,
+      state: "sending",
+      claimedCount: activeRun.annotationIds.length,
+      completedCount: activeRun.completedAnnotationIds.size,
+      currentAnnotationId: activeRun.currentAnnotationId,
+      message,
+    }, "dispatch.progress")
+  }
+
+  private buildQueuedDispatchMessage(
+    run: Pick<QueuedDispatchRun, "mode">,
+    queuePosition: number,
+    merged: boolean,
+  ): string {
+    const label = run.mode === "manual" ? "manual" : "auto"
+    if (merged) {
+      return `Merged new ${label} work into queued dispatch #${queuePosition}`
+    }
+
+    return `Queued ${label} dispatch #${queuePosition}`
+  }
+
+  private emitQueuedDispatchState(
+    run: QueuedDispatchRun,
+    queuePosition: number,
+    merged: boolean,
+  ): AgentDispatchState {
+    return this.updateDispatchState(run.projectId, {
+      agentId: run.agentId,
+      runId: run.runId,
+      mode: run.mode,
+      trigger: run.trigger,
+      state: "queued",
+      queuePosition,
+      message: this.buildQueuedDispatchMessage(run, queuePosition, merged),
+    }, "dispatch.queued")
+  }
+
+  private subscribeToRunAnnotationUpdates(activeRun: PendingDispatchRun): () => void {
+    return eventBus.subscribe((event) => {
+      if (event.type !== "annotation.updated") return
+      const payload = event.payload
+      if (!payload || typeof payload !== "object" || !("id" in payload) || typeof payload.id !== "string") {
+        return
+      }
+      if (!activeRun.annotationIds.includes(payload.id)) return
+
+      const annotation = payload as AnnotationV2
+      const status = annotation.status ?? "pending"
+      if ((status !== "resolved" && status !== "dismissed") || activeRun.completedAnnotationIds.has(annotation.id)) {
+        return
+      }
+
+      activeRun.completedAnnotationIds.add(annotation.id)
+      activeRun.currentAnnotationId = activeRun.annotationIds.find(
+        (annotationId) => !activeRun.completedAnnotationIds.has(annotationId),
+      )
+
+      const completedCount = activeRun.completedAnnotationIds.size
+      const message = `Completed ${completedCount} of ${activeRun.annotationIds.length} annotations`
+      this.updateDispatchState(activeRun.projectId, {
+        agentId: activeRun.agentId,
+        runId: activeRun.runId,
+        mode: activeRun.mode,
+        trigger: activeRun.trigger,
+        state: "sending",
+        claimedCount: activeRun.annotationIds.length,
+        completedCount,
+        currentAnnotationId: activeRun.currentAnnotationId,
+        message,
+      }, "dispatch.annotation.completed")
+    })
+  }
+
+  private buildCompletionMessage(
+    activeRun: PendingDispatchRun,
+    agentText?: string,
+    stopReason?: string,
+  ): string {
+    const completedCount = activeRun.completedAnnotationIds.size
+    const claimedCount = activeRun.annotationIds.length
+    const remainingCount = claimedCount - completedCount
+    const summaryText = truncateMessage(agentText, 180)
+
+    if (remainingCount <= 0) {
+      return summaryText ?? `Completed ${claimedCount} annotation${claimedCount === 1 ? "" : "s"}`
+    }
+
+    const base = `Completed ${completedCount} of ${claimedCount} annotations`
+    const suffix = `Returned ${remainingCount} unresolved annotation${remainingCount === 1 ? "" : "s"} to pending`
+    if (summaryText) {
+      return truncateMessage(`${base}. ${suffix}. ${summaryText}`, 280) ?? `${base}. ${suffix}`
+    }
+
+    return stopReason
+      ? `${base}. ${suffix}. ${stopReason}`
+      : `${base}. ${suffix}`
+  }
+
+  private scheduleDispatchDrain(projectId: string): void {
+    if (this.drainingProjects.has(projectId)) {
+      return
+    }
+
+    queueMicrotask(() => {
+      void this.drainDispatchQueue(projectId)
+    })
+  }
+
+  private recordSuccessfulDispatchSessions(
+    config: Pick<ResolvedAgentConfig, "id" | "label" | "kind">,
+    annotations: AnnotationV2[],
+    runId: string,
+  ): void {
+    const sessionIds = [...new Set(
+      annotations
+        .map((annotation) => annotation.sessionId?.trim())
+        .filter((sessionId): sessionId is string => Boolean(sessionId)),
+    )];
+    if (sessionIds.length === 0) return;
+
+    const metadata = buildSessionAgentMetadata(config, runId);
+    for (const sessionId of sessionIds) {
+      updateSessionProjectId(sessionId, undefined, metadata);
+    }
   }
 
   selectAgent(projectId: string, agentId: string): AgentSummary[] {
@@ -441,12 +712,14 @@ export class AgentManager {
           const text = (content as Record<string, unknown>).text;
           if (typeof text === "string" && text.trim()) {
             runtime.lastAgentText = `${runtime.lastAgentText ?? ""}${text}`;
+            this.emitRuntimeProgress(projectId, runtime);
           }
         }
       }
 
       if (sessionUpdate === "tool_call" || sessionUpdate === "tool_call_update") {
         runtime.lastAgentText = truncateMessage(runtime.lastAgentText);
+        this.emitRuntimeProgress(projectId, runtime);
       }
     });
 
@@ -572,25 +845,28 @@ export class AgentManager {
     return this.listAgents(projectId);
   }
 
-  private collectSessions(projectId: string, sessionId?: string): Session[] {
-    if (sessionId) {
-      const session = getSession(sessionId);
-      return session && isDispatchableSession(session) ? [session] : [];
+  private collectSessions(projectId: string, sessionIds?: string[]): Session[] {
+    if (sessionIds && sessionIds.length > 0) {
+      return [...new Set(sessionIds)]
+        .map((sessionId) => getSession(sessionId))
+        .filter((session): session is Session => Boolean(session && isDispatchableSession(session)))
     }
 
-    return filterSessionsByProject(listSessions(), projectId).filter(isDispatchableSession);
+    return filterSessionsByProject(listSessions(), projectId).filter(isDispatchableSession)
   }
 
-  private collectPendingAnnotations(projectId: string, sessionId?: string): AnnotationV2[] {
-    if (sessionId) {
-      const session = getSession(sessionId);
-      return session && isDispatchableSession(session)
-        ? getPendingAnnotationsV2(sessionId)
-        : [];
+  private collectPendingAnnotations(projectId: string, sessionIds?: string[]): AnnotationV2[] {
+    if (sessionIds && sessionIds.length > 0) {
+      return [...new Set(sessionIds)].flatMap((sessionId) => {
+        const session = getSession(sessionId)
+        return session && isDispatchableSession(session)
+          ? getPendingAnnotationsV2(sessionId)
+          : []
+      })
     }
 
-    const sessions = filterSessionsByProject(listSessions(), projectId).filter(isDispatchableSession);
-    return sessions.flatMap((session) => getPendingAnnotationsV2(session.id));
+    const sessions = filterSessionsByProject(listSessions(), projectId).filter(isDispatchableSession)
+    return sessions.flatMap((session) => getPendingAnnotationsV2(session.id))
   }
 
   async dispatch(params: {
@@ -599,13 +875,13 @@ export class AgentManager {
     trigger: "annotation.upsert" | "manual.send";
     sessionId?: string;
   }): Promise<AgentDispatchState> {
-    const agentId = this.getEffectiveAgentId(params.projectId);
+    const agentId = this.getEffectiveAgentId(params.projectId)
     if (!agentId) {
-      throw new Error("No active agent configured for this project");
+      throw new Error("No active agent configured for this project")
     }
 
-    requeueExpiredProcessingAnnotationsV2();
-    const pendingAnnotations = this.collectPendingAnnotations(params.projectId, params.sessionId);
+    requeueExpiredProcessingAnnotationsV2()
+    const pendingAnnotations = this.collectPendingAnnotations(params.projectId, normalizeSessionIds(params.sessionId))
     if (pendingAnnotations.length === 0) {
       return this.updateDispatchState(params.projectId, {
         agentId,
@@ -613,171 +889,286 @@ export class AgentManager {
         trigger: params.trigger,
         state: "skipped",
         message: "No pending annotations to send",
-      });
+      }, "dispatch.skipped")
     }
 
-    const sessions = this.collectSessions(params.projectId, params.sessionId);
-    const runtime = await this.ensureRuntime(params.projectId, agentId);
-    if (!runtime.sessionId) {
-      throw new Error("Agent session was not established");
-    }
-
-    const runId = randomUUID();
-    const annotations = this.claimPendingAnnotations(params.projectId, agentId, runId, params.sessionId);
-    if (annotations.length === 0) {
-      return this.updateDispatchState(params.projectId, {
-        agentId,
-        runId,
-        mode: params.mode,
-        trigger: params.trigger,
-        state: "skipped",
-        claimedCount: 0,
-        message: "All pending annotations are already processing",
-      });
-    }
-
-    runtime.status = "busy";
-    runtime.lastAgentText = "";
-    runtime.lastError = undefined;
-    this.activeDispatchRunByProject.set(params.projectId, {
-      runId,
-      agentId,
-      annotationIds: annotations.map((annotation) => annotation.id),
-      cancelRequested: false,
-    });
-    this.emit({
-      type: "status",
+    const queued = this.queueDispatch({
+      runId: randomUUID(),
       projectId: params.projectId,
-      agent: this.summarizeAgent(params.projectId, runtime.config),
-    });
-
-    this.updateDispatchState(params.projectId, {
       agentId,
-      runId,
       mode: params.mode,
       trigger: params.trigger,
+      sessionIds: normalizeSessionIds(params.sessionId),
+      queuedAt: nowIso(),
+    })
+
+    const state = this.emitQueuedDispatchState(queued.run, queued.queuePosition, queued.merged)
+    this.scheduleDispatchDrain(params.projectId)
+    return state
+  }
+
+  private async drainDispatchQueue(projectId: string): Promise<void> {
+    if (this.drainingProjects.has(projectId)) {
+      return
+    }
+
+    this.drainingProjects.add(projectId)
+    try {
+      while (!this.activeDispatchRunByProject.has(projectId)) {
+        const next = this.dequeueDispatch(projectId)
+        if (!next) break
+        await this.executeDispatch(next)
+      }
+    } finally {
+      this.drainingProjects.delete(projectId)
+      if (!this.activeDispatchRunByProject.has(projectId) && this.getDispatchQueue(projectId).length > 0) {
+        this.scheduleDispatchDrain(projectId)
+      }
+    }
+  }
+
+  private async executeDispatch(run: QueuedDispatchRun): Promise<AgentDispatchState> {
+    const pendingAnnotations = this.collectPendingAnnotations(run.projectId, run.sessionIds)
+    if (pendingAnnotations.length === 0) {
+      return this.updateDispatchState(run.projectId, {
+        agentId: run.agentId,
+        runId: run.runId,
+        mode: run.mode,
+        trigger: run.trigger,
+        state: "skipped",
+        message: "No pending annotations to send",
+      }, "dispatch.skipped")
+    }
+
+    const sessions = this.collectSessions(run.projectId, run.sessionIds)
+    const runtime = await this.ensureRuntime(run.projectId, run.agentId)
+    if (!runtime.sessionId) {
+      throw new Error("Agent session was not established")
+    }
+
+    const annotations = this.claimPendingAnnotations(run.projectId, run.agentId, run.runId, run.sessionIds)
+    if (annotations.length === 0) {
+      return this.updateDispatchState(run.projectId, {
+        agentId: run.agentId,
+        runId: run.runId,
+        mode: run.mode,
+        trigger: run.trigger,
+        state: "skipped",
+        claimedCount: 0,
+        completedCount: 0,
+        message: "All pending annotations are already processing",
+      }, "dispatch.skipped")
+    }
+
+    runtime.status = "busy"
+    runtime.lastAgentText = ""
+    runtime.lastError = undefined
+    runtime.lastProgressMessage = undefined
+
+    const activeRun: PendingDispatchRun = {
+      ...run,
+      annotationIds: annotations.map((annotation) => annotation.id),
+      completedAnnotationIds: new Set<string>(),
+      cancelRequested: false,
+      currentAnnotationId: annotations[0]?.id,
+    }
+    this.activeDispatchRunByProject.set(run.projectId, activeRun)
+
+    const unsubscribeRunUpdates = this.subscribeToRunAnnotationUpdates(activeRun)
+    this.emit({
+      type: "status",
+      projectId: run.projectId,
+      agent: this.summarizeAgent(run.projectId, runtime.config),
+    })
+
+    this.updateDispatchState(run.projectId, {
+      agentId: run.agentId,
+      runId: run.runId,
+      mode: run.mode,
+      trigger: run.trigger,
       state: "sending",
       claimedCount: annotations.length,
+      completedCount: 0,
+      currentAnnotationId: activeRun.currentAnnotationId,
       message: `Dispatching ${annotations.length} claimed annotation${annotations.length === 1 ? "" : "s"} to agent`,
-    });
+    }, "dispatch.started")
 
     try {
       const prompt = buildPrompt({
-        projectId: params.projectId,
-        agentId,
-        runId,
-        mode: params.mode,
-        trigger: params.trigger,
+        projectId: run.projectId,
+        agentId: run.agentId,
+        runId: run.runId,
+        mode: run.mode,
+        trigger: run.trigger,
         annotations,
         sessions,
-      });
-      const result = await runtime.client.prompt(runtime.sessionId, prompt);
-      runtime.status = "ready";
+      })
+      const result = await runtime.client.prompt(runtime.sessionId, prompt)
+      runtime.status = "ready"
 
-      const activeRun = this.activeDispatchRunByProject.get(params.projectId);
-      if (!activeRun || activeRun.runId !== runId || activeRun.cancelRequested) {
-        return this.getDispatchState(params.projectId) ?? {
-          projectId: params.projectId,
-          agentId,
-          runId,
-          mode: params.mode,
-          trigger: params.trigger,
+      const currentActiveRun = this.activeDispatchRunByProject.get(run.projectId)
+      if (!currentActiveRun || currentActiveRun.runId !== run.runId || currentActiveRun.cancelRequested) {
+        return this.getDispatchState(run.projectId) ?? {
+          projectId: run.projectId,
+          agentId: run.agentId,
+          runId: run.runId,
+          mode: run.mode,
+          trigger: run.trigger,
           state: "cancelled",
           claimedCount: annotations.length,
+          completedCount: currentActiveRun?.completedAnnotationIds.size ?? 0,
           message: "Cancelled current agent turn",
           updatedAt: nowIso(),
-        };
+        }
       }
 
-      const message = truncateMessage(runtime.lastAgentText) || result.stopReason || "Turn completed";
-      return this.updateDispatchState(params.projectId, {
-        agentId,
-        runId,
-        mode: params.mode,
-        trigger: params.trigger,
+      const unresolvedIds = currentActiveRun.annotationIds.filter(
+        (annotationId) => !currentActiveRun.completedAnnotationIds.has(annotationId),
+      )
+      if (unresolvedIds.length > 0) {
+        this.releaseClaimedAnnotations(unresolvedIds, {
+          agentId: run.agentId,
+          runId: run.runId,
+        })
+      }
+
+      this.recordSuccessfulDispatchSessions(runtime.config, annotations, run.runId)
+      return this.updateDispatchState(run.projectId, {
+        agentId: run.agentId,
+        runId: run.runId,
+        mode: run.mode,
+        trigger: run.trigger,
         state: "succeeded",
         claimedCount: annotations.length,
-        message,
-      });
+        completedCount: currentActiveRun.completedAnnotationIds.size,
+        message: this.buildCompletionMessage(currentActiveRun, runtime.lastAgentText, result.stopReason),
+      }, "dispatch.completed")
     } catch (error) {
-      const activeRun = this.activeDispatchRunByProject.get(params.projectId);
-      if (!activeRun || activeRun.runId !== runId || activeRun.cancelRequested) {
-        runtime.status = "ready";
-        return this.getDispatchState(params.projectId) ?? {
-          projectId: params.projectId,
-          agentId,
-          runId,
-          mode: params.mode,
-          trigger: params.trigger,
+      const currentActiveRun = this.activeDispatchRunByProject.get(run.projectId)
+      if (!currentActiveRun || currentActiveRun.runId !== run.runId || currentActiveRun.cancelRequested) {
+        runtime.status = "ready"
+        return this.getDispatchState(run.projectId) ?? {
+          projectId: run.projectId,
+          agentId: run.agentId,
+          runId: run.runId,
+          mode: run.mode,
+          trigger: run.trigger,
           state: "cancelled",
           claimedCount: annotations.length,
+          completedCount: currentActiveRun?.completedAnnotationIds.size ?? 0,
           message: "Cancelled current agent turn",
           updatedAt: nowIso(),
-        };
+        }
       }
 
-      runtime.status = "error";
-      runtime.lastError = (error as Error).message;
-      this.releaseClaimedAnnotations(annotations.map((annotation) => annotation.id), { agentId, runId });
-      return this.updateDispatchState(params.projectId, {
-        agentId,
-        runId,
-        mode: params.mode,
-        trigger: params.trigger,
+      runtime.status = "error"
+      runtime.lastError = (error as Error).message
+      this.releaseClaimedAnnotations(annotations.map((annotation) => annotation.id), {
+        agentId: run.agentId,
+        runId: run.runId,
+      })
+      return this.updateDispatchState(run.projectId, {
+        agentId: run.agentId,
+        runId: run.runId,
+        mode: run.mode,
+        trigger: run.trigger,
         state: "failed",
         claimedCount: annotations.length,
+        completedCount: currentActiveRun.completedAnnotationIds.size,
         message: runtime.lastError,
-      });
+      }, "dispatch.failed")
     } finally {
-      const activeRun = this.activeDispatchRunByProject.get(params.projectId);
-      if (activeRun?.runId === runId) {
-        this.activeDispatchRunByProject.delete(params.projectId);
+      unsubscribeRunUpdates()
+      const currentActiveRun = this.activeDispatchRunByProject.get(run.projectId)
+      if (currentActiveRun?.runId === run.runId) {
+        this.activeDispatchRunByProject.delete(run.projectId)
       }
       this.emit({
         type: "status",
-        projectId: params.projectId,
-        agent: this.summarizeAgent(params.projectId, runtime.config),
-      });
+        projectId: run.projectId,
+        agent: this.summarizeAgent(run.projectId, runtime.config),
+      })
+
+      const nextRun = this.getNextQueuedDispatch(run.projectId)
+      if (nextRun) {
+        this.emitQueuedDispatchState(nextRun, 1, false)
+      }
     }
   }
 
   async cancelDispatch(projectId: string): Promise<AgentDispatchState | undefined> {
-    const activeRun = this.activeDispatchRunByProject.get(projectId);
-    const agentId = activeRun?.agentId ?? this.getEffectiveAgentId(projectId);
-    if (!agentId) return undefined;
-
-    const runtime = this.runtimes.get(this.runtimeKey(projectId, agentId));
+    const activeRun = this.activeDispatchRunByProject.get(projectId)
     if (activeRun) {
-      activeRun.cancelRequested = true;
-    }
-    if (runtime?.sessionId) {
-      await runtime.client.cancel(runtime.sessionId);
-      runtime.status = "ready";
-    }
+      const runtime = this.runtimes.get(this.runtimeKey(projectId, activeRun.agentId))
+      activeRun.cancelRequested = true
+      if (runtime?.sessionId) {
+        await runtime.client.cancel(runtime.sessionId)
+        runtime.status = "ready"
+      }
 
-    if (activeRun) {
       this.releaseClaimedAnnotations(activeRun.annotationIds, {
         agentId: activeRun.agentId,
         runId: activeRun.runId,
-      });
-      this.activeDispatchRunByProject.delete(projectId);
+      })
+      this.activeDispatchRunByProject.delete(projectId)
+
+      this.emit({
+        type: "status",
+        projectId,
+        agent: this.summarizeAgent(projectId, runtime?.config ?? this.resolveAgentConfig(activeRun.agentId)),
+      })
+
+      const cancelled = this.updateDispatchState(projectId, {
+        agentId: activeRun.agentId,
+        runId: activeRun.runId,
+        mode: activeRun.mode,
+        trigger: activeRun.trigger,
+        state: "cancelled",
+        claimedCount: activeRun.annotationIds.length,
+        completedCount: activeRun.completedAnnotationIds.size,
+        message: "Cancelled current agent turn",
+      }, "dispatch.cancelled")
+
+      const nextRun = this.getNextQueuedDispatch(projectId)
+      if (nextRun) {
+        this.emitQueuedDispatchState(nextRun, 1, false)
+        this.scheduleDispatchDrain(projectId)
+      }
+
+      return cancelled
     }
 
-    this.emit({
-      type: "status",
-      projectId,
-      agent: this.summarizeAgent(projectId, runtime?.config ?? this.resolveAgentConfig(agentId)),
-    });
+    const nextRun = this.dequeueDispatch(projectId)
+    if (!nextRun) {
+      const agentId = this.getEffectiveAgentId(projectId)
+      if (!agentId) return undefined
 
-    return this.updateDispatchState(projectId, {
-      agentId,
-      runId: activeRun?.runId,
-      mode: "manual",
-      trigger: "manual.send",
+      return this.updateDispatchState(projectId, {
+        agentId,
+        mode: "manual",
+        trigger: "manual.send",
+        state: "cancelled",
+        message: "Cancelled current agent turn",
+      }, "dispatch.cancelled")
+    }
+
+    const cancelled = this.updateDispatchState(projectId, {
+      agentId: nextRun.agentId,
+      runId: nextRun.runId,
+      mode: nextRun.mode,
+      trigger: nextRun.trigger,
       state: "cancelled",
-      claimedCount: activeRun?.annotationIds.length ?? 0,
-      message: "Cancelled current agent turn",
-    });
+      queuePosition: 1,
+      message: "Cancelled queued agent run",
+    }, "dispatch.cancelled")
+
+    const followingRun = this.getNextQueuedDispatch(projectId)
+    if (followingRun) {
+      this.emitQueuedDispatchState(followingRun, 1, false)
+      this.scheduleDispatchDrain(projectId)
+    }
+
+    return cancelled
   }
 
   async dispose(): Promise<void> {

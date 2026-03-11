@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type ComponentPublicInstance, type CSSProperties } from "vue"
+import type { AnnotationStatus, AnnotationV2 } from "@liuovo/agentation-vue-core"
 import { ANNOTATIONS_STORE_KEY, FREEZE_KEY, I18N_KEY, OVERLAY_KEY, RUNTIME_BRIDGE_KEY, SELECTION_KEY, SETTINGS_KEY } from "../injection-keys.js"
 import { COPY_EXCLUDE_FIELDS } from "../copy-fields.js"
 import { COLOR_OPTIONS } from "../composables/useSettings.js"
@@ -8,17 +9,24 @@ import { useToolbarDrag } from "../composables/useToolbarDrag.js"
 import { SUPPORTED_LOCALES, LOCALE_LABELS } from "../i18n/index.js"
 import { injectStrict } from "../utils.js"
 import type { ExportActions } from "../composables/useExport.js"
-import type { AgentDispatchState, AgentSessionSummary, AgentSummary } from "../types.js"
+import type {
+  AgentDispatchState,
+  AgentSessionDetail,
+  AgentSessionSummary,
+  AgentSummary,
+} from "../types.js"
 import {
   IconCheckCircle,
   IconChevronLeft,
   IconChevronRight,
   IconCheckSmallAnimated,
+  IconClose,
   IconClockList,
   IconConnectedNodes,
   IconCopyAnimated,
   IconEye,
   IconEyeOff,
+  IconExternalLink,
   IconGear,
   IconHelp,
   IconJson,
@@ -28,6 +36,7 @@ import {
   IconPause,
   IconPaperPlane,
   IconPlay,
+  IconRefresh,
   IconSun,
   IconTrashAlt,
   IconXmarkLarge,
@@ -41,6 +50,13 @@ const HELP_ICON_SIZE = 16
 const SETTINGS_PANEL_MAX_HEIGHT = 520
 
 type SettingsPage = typeof SETTINGS_PAGE_KEYS[number]
+type SessionDetailStatus = "idle" | "loading" | "loaded" | "error"
+
+interface SessionDetailState {
+  status: SessionDetailStatus
+  detail?: AgentSessionDetail
+  error?: string
+}
 
 const props = defineProps<{
   exportActions: ExportActions
@@ -97,6 +113,7 @@ const companionEndpoint = computed(() => syncInfo.value?.endpoint ?? "http://loc
 const mcpHttpEndpoint = computed(() => syncInfo.value?.mcpHttpUrl ?? "http://localhost:4748/mcp")
 const agentSummaries = ref<AgentSummary[]>([])
 const agentSessions = ref<AgentSessionSummary[]>([])
+const agentSessionDetails = ref<Record<string, SessionDetailState>>({})
 const agentDispatchState = ref<AgentDispatchState | null>(null)
 const agentActionPending = ref<"select" | "connect" | "disconnect" | "dispatch" | "cancel" | null>(null)
 const sessionActionPending = ref<string | null>(null)
@@ -106,7 +123,9 @@ const activeAgent = computed(() => agentSummaries.value.find((agent) => agent.is
 const sortedAgentSummaries = computed(() =>
   [...agentSummaries.value].sort((left, right) => {
     if (left.isActive !== right.isActive) return left.isActive ? -1 : 1
-    if (left.available !== right.available) return left.available ? -1 : 1
+    if (getAgentAvailabilityRank(left) !== getAgentAvailabilityRank(right)) {
+      return getAgentAvailabilityRank(right) - getAgentAvailabilityRank(left)
+    }
     if (left.isDefault !== right.isDefault) return left.isDefault ? -1 : 1
     return left.label.localeCompare(right.label)
   }))
@@ -121,13 +140,29 @@ const sortedAgentSessions = computed(() =>
     return rightTime - leftTime
   }))
 const hasAvailableAgent = computed(() => agentSummaries.value.some((agent) => agent.available))
-const dispatchInFlight = computed(() => agentDispatchState.value?.state === "sending")
+const hasInstallableAgent = computed(() => agentSummaries.value.some((agent) => agent.availability === "installable"))
+const dispatchInFlight = computed(() => {
+  const state = agentDispatchState.value?.state
+  return state === "queued" || state === "sending"
+})
 const latestAgentActivity = computed(() => agentDispatchState.value?.message ?? activeAgent.value?.lastError ?? "")
 const activeSessionCount = computed(() => agentSessions.value.filter((session) => session.status !== "closed").length)
 const showToolbarSendButton = computed(() => Boolean(activeAgent.value && bridge.agent))
 const canSendToAgent = computed(() =>
   Boolean(activeAgent.value?.available)
-  && agentActionPending.value === null)
+  && agentActionPending.value === null
+  && !dispatchInFlight.value)
+const agentsAvailabilitySummaryLabel = computed(() => {
+  if (hasAvailableAgent.value) {
+    return messages.value.settings.availableOnMachine
+  }
+
+  if (hasInstallableAgent.value) {
+    return messages.value.settings.installableOnMachine
+  }
+
+  return messages.value.settings.notInstalledOnMachine
+})
 const connectionCards = computed(() => [
   { key: "companion", label: messages.value.settings.companionEndpointLabel, value: companionEndpoint.value },
   { key: "mcp-http", label: messages.value.settings.mcpEndpointLabel, value: mcpHttpEndpoint.value },
@@ -138,7 +173,7 @@ const activeAgentConnected = computed(() => {
 })
 const primaryAgentTitle = computed(() => activeAgent.value?.label ?? messages.value.settings.noAgentSelected)
 const primaryAgentStatus = computed(() =>
-  activeAgent.value ? getAgentStatusLabel(activeAgent.value.status) : messages.value.settings.mcpStatusDisconnected)
+  activeAgent.value ? getAgentStatusLabel(activeAgent.value) : messages.value.settings.mcpStatusDisconnected)
 const primaryAgentGuidance = computed(() => {
   if (!activeAgent.value) {
     return messages.value.settings.selectAgentToStart
@@ -178,8 +213,24 @@ const primaryAgentActionDisabled = computed(() => {
     return !activeAgent.value.homepage
   }
 
-  return false
+  return dispatchInFlight.value
 })
+
+function setSessionDetailState(sessionId: string, state: SessionDetailState): void {
+  agentSessionDetails.value = {
+    ...agentSessionDetails.value,
+    [sessionId]: state,
+  }
+}
+
+function getSessionDetailState(sessionId: string): SessionDetailState {
+  return agentSessionDetails.value[sessionId] ?? { status: "idle" }
+}
+
+function getLoadedSessionDetail(sessionId: string): AgentSessionDetail | undefined {
+  const state = getSessionDetailState(sessionId)
+  return state.status === "loaded" ? state.detail : undefined
+}
 
 // Sync toolbar expanded state → annotation mode.
 // Collapsing disables selection; expanding re-enables it.
@@ -312,8 +363,23 @@ function openAgentHomepage(agent?: AgentSummary | null): void {
   window.open(agent.homepage, "_blank", "noopener,noreferrer")
 }
 
-function getAgentStatusLabel(status: AgentSummary["status"]): string {
-  switch (status) {
+function getAgentAvailabilityRank(agent: AgentSummary): number {
+  switch (agent.availability) {
+    case "installed":
+      return 2
+    case "installable":
+      return 1
+    default:
+      return 0
+  }
+}
+
+function getAgentStatusLabel(agent: AgentSummary): string {
+  if (agent.availability === "installable" && agent.status === "missing") {
+    return messages.value.settings.agentStatusInstallable
+  }
+
+  switch (agent.status) {
     case "ready":
       return messages.value.settings.agentStatusReady
     case "available":
@@ -327,6 +393,14 @@ function getAgentStatusLabel(status: AgentSummary["status"]): string {
     case "error":
       return messages.value.settings.agentStatusError
   }
+}
+
+function getAgentStatusTone(agent: AgentSummary): AgentSummary["status"] | "installable" {
+  if (agent.availability === "installable" && agent.status === "missing") {
+    return "installable"
+  }
+
+  return agent.status
 }
 
 function applyAgentState(state: { agents?: AgentSummary[]; dispatch?: AgentDispatchState | null }): void {
@@ -372,6 +446,9 @@ async function refreshAgentSessions(): Promise<void> {
   try {
     const state = await bridge.agent.listSessions()
     agentSessions.value = state.sessions
+    if (expandedSessionId.value && state.sessions.some((session) => session.id === expandedSessionId.value)) {
+      await loadSessionDetail(expandedSessionId.value, true)
+    }
   } catch (error) {
     bridge.notify?.({
       kind: "warning",
@@ -437,6 +514,7 @@ async function closeAgentSession(sessionId: string): Promise<void> {
   try {
     const state = await bridge.agent.closeSession(sessionId)
     agentSessions.value = state.sessions
+    await loadSessionDetail(sessionId, true)
   } catch (error) {
     bridge.notify?.({
       kind: "warning",
@@ -467,9 +545,14 @@ async function runPrimaryAgentAction(): Promise<void> {
 }
 
 function getAgentAvailabilityLabel(agent: AgentSummary): string {
-  return agent.available
-    ? messages.value.settings.availableOnMachine
-    : messages.value.settings.notInstalledOnMachine
+  switch (agent.availability) {
+    case "installed":
+      return messages.value.settings.availableOnMachine
+    case "installable":
+      return messages.value.settings.installableOnMachine
+    default:
+      return messages.value.settings.notInstalledOnMachine
+  }
 }
 
 function getSessionStatusLabel(status: AgentSessionSummary["status"]): string {
@@ -484,7 +567,11 @@ function getSessionStatusLabel(status: AgentSessionSummary["status"]): string {
 }
 
 function toggleSessionDetails(sessionId: string): void {
-  expandedSessionId.value = expandedSessionId.value === sessionId ? null : sessionId
+  const nextSessionId = expandedSessionId.value === sessionId ? null : sessionId
+  expandedSessionId.value = nextSessionId
+  if (nextSessionId) {
+    void loadSessionDetail(nextSessionId)
+  }
   void nextTick().then(() => {
     syncSettingsPanelHeight()
   })
@@ -501,6 +588,62 @@ function getSessionDisplayTitle(session: AgentSessionSummary): string {
   }
 }
 
+function readRecordedSessionAgent(metadata?: Record<string, unknown>): { id?: string; label: string } | null {
+  if (!metadata || typeof metadata !== "object") {
+    return null
+  }
+
+  const label = typeof metadata.agentationLastAgentLabel === "string"
+    ? metadata.agentationLastAgentLabel.trim()
+    : ""
+  const id = typeof metadata.agentationLastAgentId === "string"
+    ? metadata.agentationLastAgentId.trim()
+    : ""
+  if (!label && !id) {
+    return null
+  }
+
+  return {
+    ...(id ? { id } : {}),
+    label: label || id,
+  }
+}
+
+function deriveRecordedSessionAgent(detail: AgentSessionDetail): { id?: string; label: string } | null {
+  const recorded = readRecordedSessionAgent(detail.metadata)
+  if (recorded) {
+    return recorded
+  }
+
+  const agentIds = [...new Set(
+    detail.annotations
+      .map((annotation) => annotation.processingByAgentId?.trim())
+      .filter((agentId): agentId is string => Boolean(agentId)),
+  )]
+
+  if (agentIds.length !== 1) {
+    return null
+  }
+
+  return {
+    id: agentIds[0],
+    label: agentIds[0],
+  }
+}
+
+function getSessionRecordedAgentLabel(session: AgentSessionSummary): string {
+  return readRecordedSessionAgent(session.metadata)?.label ?? ""
+}
+
+function getLoadedSessionAgentLabel(sessionId: string): string {
+  const detail = getLoadedSessionDetail(sessionId)
+  return detail ? deriveRecordedSessionAgent(detail)?.label ?? "" : ""
+}
+
+function getSessionAgentLabel(session: AgentSessionSummary): string {
+  return getSessionRecordedAgentLabel(session) || getLoadedSessionAgentLabel(session.id)
+}
+
 function formatSessionTimestamp(value?: string): string {
   if (!value) return ""
 
@@ -515,6 +658,199 @@ function formatSessionTimestamp(value?: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date)
+}
+
+function getAnnotationStatus(annotation: AnnotationV2): AnnotationStatus {
+  return annotation.status ?? "pending"
+}
+
+function getAnnotationStatusLabel(status: AnnotationStatus): string {
+  switch (status) {
+    case "acknowledged":
+      return messages.value.workflow.statusAcknowledged
+    case "processing":
+      return messages.value.workflow.statusProcessing
+    case "resolved":
+      return messages.value.workflow.statusResolved
+    case "dismissed":
+      return messages.value.workflow.statusDismissed
+    default:
+      return messages.value.workflow.statusPending
+  }
+}
+
+function getAnnotationStatusTone(status: AnnotationStatus): AnnotationStatus {
+  switch (status) {
+    case "acknowledged":
+    case "processing":
+    case "resolved":
+    case "dismissed":
+      return status
+    default:
+      return "pending"
+  }
+}
+
+function getAnnotationActivityTimestamp(annotation: AnnotationV2): string {
+  return annotation.updatedAt ?? annotation.resolvedAt ?? annotation.createdAt ?? annotation.timestamp
+}
+
+function getAnnotationSourceLabel(annotation: AnnotationV2): string {
+  const { file, line } = annotation.source
+  return line ? `${file}:${line}` : file
+}
+
+function getAnnotationAgentReplyCount(annotation: AnnotationV2): number {
+  return (annotation.thread ?? []).filter((message) => message.role === "agent").length
+}
+
+function getAnnotationThreadCount(annotation: AnnotationV2): number {
+  return annotation.thread?.length ?? 0
+}
+
+function isHandledAnnotation(annotation: AnnotationV2): boolean {
+  const status = getAnnotationStatus(annotation)
+  return status === "processing"
+    || status === "resolved"
+    || status === "dismissed"
+    || getAnnotationAgentReplyCount(annotation) > 0
+}
+
+function getSessionDetailStats(detail: AgentSessionDetail): Array<{ key: string; label: string; tone?: string }> {
+  const pendingCount = detail.annotations.filter((annotation) => getAnnotationStatus(annotation) === "pending").length
+  const processingCount = detail.annotations.filter((annotation) => getAnnotationStatus(annotation) === "processing").length
+  const resolvedCount = detail.annotations.filter((annotation) => getAnnotationStatus(annotation) === "resolved").length
+  const dismissedCount = detail.annotations.filter((annotation) => getAnnotationStatus(annotation) === "dismissed").length
+  const handledCount = detail.annotations.filter(isHandledAnnotation).length
+  const agentReplyCount = detail.annotations.reduce((count, annotation) => count + getAnnotationAgentReplyCount(annotation), 0)
+
+  return [
+    {
+      key: "total",
+      label: messages.value.settings.sessionAnnotationCount(detail.annotations.length),
+    },
+    {
+      key: "handled",
+      label: messages.value.settings.sessionHandledCount(handledCount),
+      tone: "handled",
+    },
+    ...(pendingCount > 0 ? [{
+      key: "pending",
+      label: `${messages.value.workflow.statusPending} ${pendingCount}`,
+      tone: "pending",
+    }] : []),
+    ...(processingCount > 0 ? [{
+      key: "processing",
+      label: `${messages.value.workflow.statusProcessing} ${processingCount}`,
+      tone: "processing",
+    }] : []),
+    ...(resolvedCount > 0 ? [{
+      key: "resolved",
+      label: `${messages.value.workflow.statusResolved} ${resolvedCount}`,
+      tone: "resolved",
+    }] : []),
+    ...(dismissedCount > 0 ? [{
+      key: "dismissed",
+      label: `${messages.value.workflow.statusDismissed} ${dismissedCount}`,
+      tone: "dismissed",
+    }] : []),
+    ...(agentReplyCount > 0 ? [{
+      key: "replies",
+      label: `${messages.value.workflow.roleAgent} · ${messages.value.workflow.replyCount(agentReplyCount)}`,
+      tone: "reply",
+    }] : []),
+  ]
+}
+
+function getSortedSessionAnnotations(detail: AgentSessionDetail): AnnotationV2[] {
+  return [...detail.annotations].sort((left, right) => {
+    if (isHandledAnnotation(left) !== isHandledAnnotation(right)) {
+      return isHandledAnnotation(left) ? -1 : 1
+    }
+
+    return Date.parse(getAnnotationActivityTimestamp(right)) - Date.parse(getAnnotationActivityTimestamp(left))
+  })
+}
+
+function getSessionDetailStatsById(sessionId: string): Array<{ key: string; label: string; tone?: string }> {
+  const detail = getLoadedSessionDetail(sessionId)
+  return detail ? getSessionDetailStats(detail) : []
+}
+
+function getSortedSessionAnnotationsById(sessionId: string): AnnotationV2[] {
+  const detail = getLoadedSessionDetail(sessionId)
+  return detail ? getSortedSessionAnnotations(detail) : []
+}
+
+function getSessionDetailAnnotationCount(sessionId: string): number {
+  return getLoadedSessionDetail(sessionId)?.annotations.length ?? 0
+}
+
+function getSessionAnnotationMeta(annotation: AnnotationV2): string[] {
+  const meta = [getAnnotationSourceLabel(annotation)]
+  const activityTime = formatSessionTimestamp(getAnnotationActivityTimestamp(annotation))
+  if (activityTime) {
+    meta.push(activityTime)
+  }
+
+  const threadCount = getAnnotationThreadCount(annotation)
+  if (threadCount > 0) {
+    meta.push(messages.value.workflow.replyCount(threadCount))
+  }
+
+  if (annotation.processingByAgentId) {
+    meta.push(`${messages.value.workflow.roleAgent}: ${annotation.processingByAgentId}`)
+  } else if (annotation.resolvedBy === "agent") {
+    meta.push(`${messages.value.workflow.roleAgent}: ${messages.value.workflow.statusResolved}`)
+  }
+
+  return meta
+}
+
+function getSessionAnnotationThreadPreview(annotation: AnnotationV2): NonNullable<AnnotationV2["thread"]> {
+  return (annotation.thread ?? []).slice(-3)
+}
+
+async function loadSessionDetail(sessionId: string, force = false): Promise<void> {
+  if (!bridge.agent) return
+
+  const current = getSessionDetailState(sessionId)
+  if (current.status === "loading") return
+  if (!force && current.status === "loaded") return
+
+  setSessionDetailState(sessionId, {
+    status: "loading",
+    ...(current.detail ? { detail: current.detail } : {}),
+  })
+
+  try {
+    const detail = await bridge.agent.getSessionDetail(sessionId)
+    setSessionDetailState(sessionId, {
+      status: "loaded",
+      detail,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load session detail"
+    if (current.detail) {
+      bridge.notify?.({
+        kind: "warning",
+        duration: 2800,
+        message,
+      })
+      setSessionDetailState(sessionId, {
+        status: "loaded",
+        detail: current.detail,
+      })
+    } else {
+      setSessionDetailState(sessionId, {
+        status: "error",
+        error: message,
+      })
+    }
+  }
+
+  await nextTick()
+  syncSettingsPanelHeight()
 }
 
 function toggleCopyExcludedField(field: typeof COPY_EXCLUDE_FIELDS[number]): void {
@@ -641,7 +977,7 @@ function syncSettingsPanelHeight(): void {
       ? automationsSettingsPageRef.value
       : settingsPage.value === "sessions"
         ? sessionsSettingsPageRef.value
-      : mainSettingsPageRef.value
+        : mainSettingsPageRef.value
 
   if (!activePage) return
 
@@ -952,7 +1288,8 @@ function getMaxSettingsPanelHeight(): number {
 
               <div class="settings-section">
                 <div class="settings-row">
-                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.companionStatus }}</span>
+                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.companionStatus
+                  }}</span>
                   <span class="mcp-status" :class="{ light: isLight }">
                     <span class="status-dot" :class="mcpConnected ? 'connected' : 'disconnected'" />
                     {{ mcpConnected ? messages.settings.mcpStatusConnected : messages.settings.mcpStatusDisconnected }}
@@ -974,7 +1311,8 @@ function getMaxSettingsPanelHeight(): number {
                 <div class="agent-summary-panel" :class="{ light: isLight }">
                   <div class="agent-summary-row">
                     <strong class="agent-summary-title">{{ primaryAgentTitle }}</strong>
-                    <span class="agent-pill" :class="[activeAgent?.status ?? 'missing', { light: isLight }]">
+                    <span class="agent-pill"
+                      :class="[activeAgent ? getAgentStatusTone(activeAgent) : 'missing', { light: isLight }]">
                       {{ primaryAgentStatus }}
                     </span>
                   </div>
@@ -986,18 +1324,22 @@ function getMaxSettingsPanelHeight(): number {
                   <div class="agent-primary-actions">
                     <button class="agent-primary-btn" :class="{ light: isLight }" type="button"
                       :disabled="primaryAgentActionDisabled" @click="void runPrimaryAgentAction()">
-                      {{ primaryAgentActionLabel }}
+                      <IconExternalLink v-if="activeAgent && !activeAgent.available" :size="14" />
+                      <IconPaperPlane v-else :size="14" />
+                      <span>{{ primaryAgentActionLabel }}</span>
                     </button>
-                    <button v-if="activeAgentConnected && activeAgent && !dispatchInFlight" class="mini-btn secondary-action"
-                      :class="{ light: isLight }" type="button"
+                    <button v-if="activeAgentConnected && activeAgent && !dispatchInFlight"
+                      class="icon-action-btn compact-action" :class="{ light: isLight }" type="button"
+                      :title="messages.settings.disconnectAgent" :aria-label="messages.settings.disconnectAgent"
                       :disabled="agentActionPending !== null && agentActionPending !== 'disconnect'"
                       @click="void disconnectAgent(activeAgent.id)">
-                      {{ messages.settings.disconnectAgent }}
+                      <IconClose :size="14" />
                     </button>
-                    <button v-if="dispatchInFlight" class="mini-btn secondary-action" :class="{ light: isLight }"
-                      type="button" :disabled="(agentActionPending !== null && agentActionPending !== 'dispatch') || !agentBridgeAvailable"
+                    <button v-if="dispatchInFlight" class="icon-action-btn compact-action" :class="{ light: isLight }"
+                      type="button" :title="messages.settings.cancelSend" :aria-label="messages.settings.cancelSend"
+                      :disabled="(agentActionPending !== null && agentActionPending !== 'dispatch') || !agentBridgeAvailable"
                       @click="void cancelAgentDispatch()">
-                      {{ messages.settings.cancelSend }}
+                      <IconClose :size="14" />
                     </button>
                   </div>
                 </div>
@@ -1005,9 +1347,10 @@ function getMaxSettingsPanelHeight(): number {
 
               <div class="settings-section">
                 <div class="settings-row">
-                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentsConnection }}</span>
+                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentsConnection
+                  }}</span>
                   <span class="agent-inline-status" :class="{ light: isLight }">
-                    {{ hasAvailableAgent ? messages.settings.availableOnMachine : messages.settings.notInstalledOnMachine }}
+                    {{ agentsAvailabilitySummaryLabel }}
                   </span>
                 </div>
 
@@ -1056,8 +1399,8 @@ function getMaxSettingsPanelHeight(): number {
                       <div class="agent-card-copy">
                         <div class="agent-card-title-row compact">
                           <span class="guide-card-title">{{ agent.label }}</span>
-                          <span class="agent-pill" :class="[agent.status, { light: isLight }]">
-                            {{ getAgentStatusLabel(agent.status) }}
+                          <span class="agent-pill" :class="[getAgentStatusTone(agent), { light: isLight }]">
+                            {{ getAgentStatusLabel(agent) }}
                           </span>
                         </div>
                         <div class="agent-card-meta" :class="{ light: isLight }">
@@ -1077,9 +1420,10 @@ function getMaxSettingsPanelHeight(): number {
                         <IconCheckCircle v-if="agent.isActive" :size="16" />
                         <IconChevronRight v-else :size="16" />
                       </button>
-                      <button v-if="agent.homepage" class="mini-btn" :class="{ light: isLight }" type="button"
+                      <button v-if="agent.homepage" class="icon-action-btn" :class="{ light: isLight }" type="button"
+                        :title="messages.settings.openHomepage" :aria-label="messages.settings.openHomepage"
                         :disabled="agentActionPending !== null" @click="openAgentHomepage(agent)">
-                        {{ messages.settings.openHomepage }}
+                        <IconExternalLink :size="14" />
                       </button>
                     </div>
                   </div>
@@ -1087,11 +1431,15 @@ function getMaxSettingsPanelHeight(): number {
                 <p v-else class="settings-description" :class="{ light: isLight }">
                   {{ messages.settings.noAgentsAvailable }}
                 </p>
+                <p class="settings-description" :class="{ light: isLight }">
+                  {{ messages.settings.agentInstallPrerequisite }}
+                </p>
               </div>
 
               <div class="settings-section" v-if="latestAgentActivity">
                 <div class="settings-row">
-                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentLastActivity }}</span>
+                  <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentLastActivity
+                  }}</span>
                 </div>
                 <p class="settings-description" :class="{ light: isLight }">
                   {{ latestAgentActivity }}
@@ -1129,9 +1477,10 @@ function getMaxSettingsPanelHeight(): number {
               <div class="settings-section">
                 <div class="settings-row">
                   <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentSessions }}</span>
-                  <button class="mini-btn" :class="{ light: isLight }" type="button"
+                  <button class="icon-action-btn" :class="{ light: isLight }" type="button"
+                    :title="messages.settings.refreshSessions" :aria-label="messages.settings.refreshSessions"
                     :disabled="sessionActionPending !== null" @click="void refreshAgentSessions()">
-                    {{ messages.settings.refreshSessions }}
+                    <IconRefresh :size="14" />
                   </button>
                 </div>
                 <p class="settings-description" :class="{ light: isLight }">
@@ -1153,41 +1502,133 @@ function getMaxSettingsPanelHeight(): number {
                       <div class="session-card-meta" :class="{ light: isLight }">
                         <span>{{ formatSessionTimestamp(session.updatedAt ?? session.createdAt) }}</span>
                         <span>{{ messages.settings.sessionAnnotationCount(session.annotationCount) }}</span>
+                        <span v-if="getSessionAgentLabel(session)">{{ messages.settings.sessionAgentLabel }}: {{
+                          getSessionAgentLabel(session) }}</span>
                       </div>
                     </div>
 
                     <div class="session-card-actions">
-                      <button class="mini-btn" :class="{ light: isLight }" type="button"
+                      <button class="icon-action-btn"
+                        :class="{ light: isLight, active: expandedSessionId === session.id }" type="button"
+                        :title="expandedSessionId === session.id ? messages.settings.hideSession : messages.settings.viewSession"
+                        :aria-label="expandedSessionId === session.id ? messages.settings.hideSession : messages.settings.viewSession"
                         :disabled="sessionActionPending !== null" @click="toggleSessionDetails(session.id)">
-                        {{ expandedSessionId === session.id ? messages.settings.hideSession : messages.settings.viewSession }}
+                        <IconEye v-if="expandedSessionId !== session.id" :size="14" />
+                        <IconEyeOff v-else :size="14" />
                       </button>
-                      <button v-if="session.status !== 'closed'" class="mini-btn" :class="{ light: isLight }"
-                        type="button" :disabled="sessionActionPending !== null"
+                      <button v-if="session.status !== 'closed'" class="icon-action-btn" :class="{ light: isLight }"
+                        type="button" :title="messages.settings.closeSession"
+                        :aria-label="messages.settings.closeSession" :disabled="sessionActionPending !== null"
                         @click="void closeAgentSession(session.id)">
-                        {{ messages.settings.closeSession }}
+                        <IconClose :size="14" />
                       </button>
                     </div>
 
-                    <div v-if="expandedSessionId === session.id" class="session-card-details" :class="{ light: isLight }">
+                    <div v-if="expandedSessionId === session.id" class="session-card-details"
+                      :class="{ light: isLight }">
                       <div class="session-detail-row">
-                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionIdLabel }}</span>
+                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionIdLabel
+                        }}</span>
                         <code>{{ session.id }}</code>
                       </div>
                       <div class="session-detail-row">
-                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionAnnotationsLabel }}</span>
+                        <span class="settings-label" :class="{ light: isLight }">{{
+                          messages.settings.sessionAnnotationsLabel }}</span>
                         <span>{{ messages.settings.sessionAnnotationCount(session.annotationCount) }}</span>
                       </div>
                       <div class="session-detail-row">
-                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionCreatedLabel }}</span>
+                        <span class="settings-label" :class="{ light: isLight }">{{
+                          messages.settings.sessionCreatedLabel }}</span>
                         <span>{{ formatSessionTimestamp(session.createdAt) }}</span>
                       </div>
                       <div class="session-detail-row" v-if="session.updatedAt">
-                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionUpdatedLabel }}</span>
+                        <span class="settings-label" :class="{ light: isLight }">{{
+                          messages.settings.sessionUpdatedLabel }}</span>
                         <span>{{ formatSessionTimestamp(session.updatedAt) }}</span>
                       </div>
+                      <div class="session-detail-row" v-if="getSessionAgentLabel(session)">
+                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionAgentLabel
+                        }}</span>
+                        <span>{{ getSessionAgentLabel(session) }}</span>
+                      </div>
                       <div class="session-detail-stack">
-                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionUrlLabel }}</span>
+                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.sessionUrlLabel
+                        }}</span>
                         <pre class="guide-code session-url" :class="{ light: isLight }">{{ session.url }}</pre>
+                      </div>
+                      <div class="session-detail-stack">
+                        <span class="settings-label" :class="{ light: isLight }">{{ messages.settings.agentLastActivity
+                        }}</span>
+
+                        <div v-if="getSessionDetailState(session.id).status === 'loading'"
+                          class="session-detail-feedback" :class="{ light: isLight }">
+                          {{ messages.settings.sessionDetailLoading }}
+                        </div>
+
+                        <div v-else-if="getSessionDetailState(session.id).status === 'error'"
+                          class="session-detail-feedback error" :class="{ light: isLight }">
+                          <span>{{ messages.settings.sessionDetailError(getSessionDetailState(session.id).error ?? "")
+                          }}</span>
+                          <button class="mini-btn" :class="{ light: isLight }" type="button"
+                            :disabled="sessionActionPending !== null" @click="void loadSessionDetail(session.id, true)">
+                            {{ messages.settings.refreshSessions }}
+                          </button>
+                        </div>
+
+                        <template v-else-if="getLoadedSessionDetail(session.id)">
+                          <div class="session-stat-list">
+                            <span v-for="chip in getSessionDetailStatsById(session.id)" :key="chip.key"
+                              class="session-stat-chip" :class="[chip.tone ?? 'default', { light: isLight }]">
+                              {{ chip.label }}
+                            </span>
+                          </div>
+
+                          <div v-if="getSessionDetailAnnotationCount(session.id) === 0" class="session-detail-feedback"
+                            :class="{ light: isLight }">
+                            {{ messages.settings.sessionNoAnnotations }}
+                          </div>
+
+                          <div v-else class="session-annotation-list">
+                            <article v-for="annotation in getSortedSessionAnnotationsById(session.id)"
+                              :key="annotation.id" class="session-annotation-item" :class="{ light: isLight }">
+                              <div class="session-annotation-header">
+                                <div class="session-annotation-copy">
+                                  <strong class="session-annotation-comment">{{ annotation.comment }}</strong>
+                                  <div class="session-annotation-meta" :class="{ light: isLight }">
+                                    <span v-for="meta in getSessionAnnotationMeta(annotation)" :key="meta">{{ meta
+                                    }}</span>
+                                  </div>
+                                </div>
+                                <span class="agent-pill"
+                                  :class="[getAnnotationStatusTone(getAnnotationStatus(annotation)), { light: isLight }]">
+                                  {{ getAnnotationStatusLabel(getAnnotationStatus(annotation)) }}
+                                </span>
+                              </div>
+
+                              <div v-if="getSessionAnnotationThreadPreview(annotation).length"
+                                class="session-thread-preview">
+                                <div class="thread-title" :class="{ light: isLight }">{{ messages.workflow.thread }}
+                                </div>
+                                <div class="session-thread-list">
+                                  <div v-for="message in getSessionAnnotationThreadPreview(annotation)"
+                                    :key="message.id" class="session-thread-item" :class="{ light: isLight }"
+                                    :data-role="message.role">
+                                    <div class="session-thread-meta" :class="{ light: isLight }">
+                                      <span>{{ message.role === 'agent' ? messages.workflow.roleAgent :
+                                        messages.workflow.roleHuman }}</span>
+                                      <span>{{ formatSessionTimestamp(typeof message.timestamp === 'number'
+                                        ? new Date(message.timestamp).toISOString()
+                                        : message.timestamp) }}</span>
+                                    </div>
+                                    <div class="session-thread-content" :class="{ light: isLight }">
+                                      {{ message.content }}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </article>
+                          </div>
+                        </template>
                       </div>
                     </div>
                   </div>
@@ -1205,11 +1646,6 @@ function getMaxSettingsPanelHeight(): number {
 </template>
 
 <style scoped>
-/* Protect stroke-based SVG icons */
-:deep(svg[fill="none"]) {
-  fill: none !important;
-}
-
 @keyframes toolbarEnter {
   from {
     opacity: 0;
@@ -1261,7 +1697,7 @@ function getMaxSettingsPanelHeight(): number {
 /* --- Toolbar wrapper ------------------------------------------------- */
 
 .toolbar {
-  --ag-toolbar-expanded-width: 280px;
+  --ag-toolbar-expanded-width: 220px;
   position: fixed;
   right: 20px;
   bottom: 20px;
@@ -1272,7 +1708,7 @@ function getMaxSettingsPanelHeight(): number {
 }
 
 .toolbar.has-agent-send {
-  --ag-toolbar-expanded-width: 320px;
+  --ag-toolbar-expanded-width: 248px;
 }
 
 .toolbar.dragging {
@@ -1288,11 +1724,11 @@ function getMaxSettingsPanelHeight(): number {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 44px;
-  background: #1a1a1a;
-  color: #fff;
+  height: 40px;
+  background: rgba(14, 18, 26, 0.94);
+  color: #f8fafc;
   border: none;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.22), 0 0 0 1px rgba(255, 255, 255, 0.06);
   pointer-events: auto;
   user-select: none;
   cursor: grab;
@@ -1320,14 +1756,14 @@ function getMaxSettingsPanelHeight(): number {
 
 /* Collapsed circle */
 .toolbar-container.collapsed {
-  width: 44px;
-  border-radius: 22px;
+  width: 40px;
+  border-radius: 14px;
   padding: 0;
   cursor: pointer;
 }
 
 .toolbar-container.collapsed:hover {
-  background: #2a2a2a;
+  background: rgba(22, 28, 39, 0.98);
 }
 
 .toolbar-container.collapsed:active {
@@ -1337,15 +1773,15 @@ function getMaxSettingsPanelHeight(): number {
 /* Expanded pill */
 .toolbar-container.expanded {
   width: var(--ag-toolbar-expanded-width);
-  border-radius: 24px;
-  padding: 6px;
+  border-radius: 14px;
+  padding: 4px;
 }
 
 /* Light mode */
 .toolbar-container.light {
-  background: #fff;
-  color: rgba(0, 0, 0, 0.85);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 4px 16px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  background: rgba(255, 255, 255, 0.96);
+  color: rgba(15, 23, 42, 0.86);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(15, 23, 42, 0.06);
 }
 
 .toolbar-container.light.collapsed:hover {
@@ -1384,7 +1820,7 @@ function getMaxSettingsPanelHeight(): number {
 .controls-content {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 3px;
   transform-origin: center;
   will-change: opacity, transform, filter;
   transition:
@@ -1413,12 +1849,12 @@ function getMaxSettingsPanelHeight(): number {
 
 .badge {
   position: absolute;
-  top: -13px;
-  right: -13px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
+  top: -10px;
+  right: -10px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
   background: #3c82f7;
   color: #fff;
   display: flex;
@@ -1446,12 +1882,12 @@ function getMaxSettingsPanelHeight(): number {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.85);
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(248, 250, 252, 0.82);
   cursor: pointer;
   transition:
     background-color 0.15s ease,
@@ -1461,7 +1897,7 @@ function getMaxSettingsPanelHeight(): number {
 }
 
 .control-btn:hover:not(:disabled):not([data-active]):not([data-state]) {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08);
   color: #fff;
 }
 
@@ -1496,7 +1932,8 @@ function getMaxSettingsPanelHeight(): number {
 
 /* Light variants */
 .control-btn.light {
-  color: rgba(0, 0, 0, 0.5);
+  background: rgba(15, 23, 42, 0.025);
+  color: rgba(15, 23, 42, 0.56);
 }
 
 .control-btn.light:hover:not(:disabled):not([data-active]):not([data-state]) {
@@ -1528,9 +1965,9 @@ function getMaxSettingsPanelHeight(): number {
 
 .divider {
   width: 1px;
-  height: 12px;
-  margin: 0 2px;
-  background: rgba(255, 255, 255, 0.15);
+  height: 16px;
+  margin: 0 1px;
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .divider.light {
@@ -1543,12 +1980,12 @@ function getMaxSettingsPanelHeight(): number {
   position: absolute;
   right: 5px;
   bottom: calc(100% + 8px);
-  width: min(344px, calc(100vw - 24px));
+  width: min(320px, calc(100vw - 24px));
   z-index: 1;
-  background: #1a1a1a;
-  border-radius: 16px;
+  background: rgba(14, 18, 26, 0.98);
+  border-radius: 18px;
   padding: 0;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  box-shadow: 0 18px 42px rgba(2, 6, 23, 0.28), 0 0 0 1px rgba(255, 255, 255, 0.06);
   cursor: default;
   --ag-settings-shift: 8px;
   transform-origin: bottom right;
@@ -1564,8 +2001,8 @@ function getMaxSettingsPanelHeight(): number {
 }
 
 .settings-panel.light {
-  background: #fff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 4px 16px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.14), 0 0 0 1px rgba(15, 23, 42, 0.06);
 }
 
 .settings-panel-enter-active {
@@ -1606,8 +2043,8 @@ function getMaxSettingsPanelHeight(): number {
   display: flex;
   align-items: center;
   min-height: 24px;
-  margin: -13px -16px 8px;
-  background: #1a1a1a;
+  margin: -13px -16px 8px -16px;
+  background: #0f121a;
   padding: 13px 16px 9px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.07);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -1698,8 +2135,8 @@ function getMaxSettingsPanelHeight(): number {
 /* --- Settings sections ----------------------------------------------- */
 
 .settings-section+.settings-section {
-  margin-top: 8px;
-  padding-top: 8px;
+  margin-top: 6px;
+  padding-top: 6px;
   border-top: 1px solid rgba(255, 255, 255, 0.07);
 }
 
@@ -2295,9 +2732,9 @@ function getMaxSettingsPanelHeight(): number {
 
 .settings-description {
   margin: 6px 0 0;
-  font-size: 11px;
-  line-height: 1.45;
-  color: rgba(255, 255, 255, 0.4);
+  font-size: 10.5px;
+  line-height: 1.42;
+  color: rgba(255, 255, 255, 0.42);
 }
 
 .settings-description.light {
@@ -2306,9 +2743,9 @@ function getMaxSettingsPanelHeight(): number {
 
 .agent-summary-panel {
   display: grid;
-  gap: 12px;
-  margin-top: 10px;
-  padding: 12px;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 10px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.03);
@@ -2333,7 +2770,8 @@ function getMaxSettingsPanelHeight(): number {
 }
 
 .agent-primary-actions {
-  display: grid;
+  display: flex;
+  align-items: center;
   gap: 8px;
 }
 
@@ -2341,11 +2779,12 @@ function getMaxSettingsPanelHeight(): number {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   width: 100%;
-  min-height: 36px;
-  padding: 0 14px;
+  min-height: 32px;
+  padding: 0 12px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 10px;
+  border-radius: 999px;
   background: #f5f5f5;
   color: #111827;
   font-size: 12px;
@@ -2360,7 +2799,7 @@ function getMaxSettingsPanelHeight(): number {
 
 .agent-primary-btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.14);
 }
 
 .agent-primary-btn.light {
@@ -2375,8 +2814,8 @@ function getMaxSettingsPanelHeight(): number {
   box-shadow: none;
 }
 
-.secondary-action {
-  width: 100%;
+.compact-action {
+  flex-shrink: 0;
 }
 
 .agent-inline-status {
@@ -2391,8 +2830,8 @@ function getMaxSettingsPanelHeight(): number {
 
 .agent-list {
   display: grid;
-  gap: 10px;
-  margin-top: 10px;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .agent-list.compact {
@@ -2401,8 +2840,8 @@ function getMaxSettingsPanelHeight(): number {
 
 .agent-card {
   display: grid;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 9px 10px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.035);
@@ -2426,7 +2865,7 @@ function getMaxSettingsPanelHeight(): number {
 .agent-card.compact {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .agent-card-main {
@@ -2465,9 +2904,9 @@ function getMaxSettingsPanelHeight(): number {
 .agent-card-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  font-size: 11px;
-  line-height: 1.45;
+  gap: 6px;
+  font-size: 10.5px;
+  line-height: 1.4;
   color: rgba(255, 255, 255, 0.46);
 }
 
@@ -2491,8 +2930,8 @@ function getMaxSettingsPanelHeight(): number {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 28px;
-  padding: 0 10px;
+  min-height: 24px;
+  padding: 0 9px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
@@ -2520,6 +2959,11 @@ function getMaxSettingsPanelHeight(): number {
 .agent-pill.busy {
   border-color: rgba(245, 158, 11, 0.24);
   color: #f59e0b;
+}
+
+.agent-pill.installable {
+  border-color: rgba(251, 191, 36, 0.24);
+  color: #fbbf24;
 }
 
 .agent-pill.approved {
@@ -2578,11 +3022,11 @@ function getMaxSettingsPanelHeight(): number {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 999px;
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.04);
   color: rgba(255, 255, 255, 0.82);
   cursor: pointer;
@@ -2643,14 +3087,14 @@ function getMaxSettingsPanelHeight(): number {
 
 .session-list {
   display: grid;
-  gap: 10px;
-  margin-top: 10px;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .session-card {
   display: grid;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 9px 10px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.035);
@@ -2684,9 +3128,9 @@ function getMaxSettingsPanelHeight(): number {
 .session-card-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  font-size: 11px;
-  line-height: 1.45;
+  gap: 6px;
+  font-size: 10.5px;
+  line-height: 1.4;
   color: rgba(255, 255, 255, 0.46);
 }
 
@@ -2696,8 +3140,8 @@ function getMaxSettingsPanelHeight(): number {
 
 .session-card-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
 }
 
 .session-card-details {
@@ -2738,6 +3182,197 @@ function getMaxSettingsPanelHeight(): number {
   gap: 6px;
 }
 
+.session-detail-feedback {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.session-detail-feedback.light {
+  background: rgba(0, 0, 0, 0.03);
+  color: rgba(15, 23, 42, 0.7);
+}
+
+.session-detail-feedback.error {
+  border: 1px solid rgba(239, 68, 68, 0.16);
+}
+
+.session-stat-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.session-stat-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.session-stat-chip.light {
+  border-color: rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.03);
+  color: rgba(15, 23, 42, 0.76);
+}
+
+.session-stat-chip.handled {
+  border-color: rgba(96, 165, 250, 0.2);
+  color: #60a5fa;
+}
+
+.session-stat-chip.pending {
+  border-color: rgba(148, 163, 184, 0.18);
+}
+
+.session-stat-chip.processing,
+.session-stat-chip.installable,
+.session-stat-chip.reply {
+  border-color: rgba(245, 158, 11, 0.18);
+  color: #f59e0b;
+}
+
+.session-stat-chip.resolved {
+  border-color: rgba(34, 197, 94, 0.18);
+  color: #22c55e;
+}
+
+.session-stat-chip.dismissed {
+  border-color: rgba(239, 68, 68, 0.18);
+  color: #ef4444;
+}
+
+.session-annotation-list {
+  display: grid;
+  gap: 10px;
+}
+
+.session-annotation-item {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.session-annotation-item.light {
+  border-color: rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.session-annotation-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.session-annotation-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.session-annotation-comment {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.session-annotation-item.light .session-annotation-comment {
+  color: rgba(15, 23, 42, 0.9);
+}
+
+.session-annotation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.46);
+}
+
+.session-annotation-meta.light {
+  color: rgba(0, 0, 0, 0.42);
+}
+
+.session-thread-preview {
+  display: grid;
+  gap: 8px;
+}
+
+.thread-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.thread-title.light {
+  color: rgba(0, 0, 0, 0.48);
+}
+
+.session-thread-list {
+  display: grid;
+  gap: 8px;
+}
+
+.session-thread-item {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.session-thread-item[data-role="human"] {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.session-thread-item.light {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.session-thread-item.light[data-role="human"] {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.session-thread-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.44);
+}
+
+.session-thread-meta.light {
+  color: rgba(0, 0, 0, 0.42);
+}
+
+.session-thread-content {
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.84);
+  white-space: pre-wrap;
+}
+
+.session-thread-content.light {
+  color: rgba(15, 23, 42, 0.82);
+}
+
 .session-url {
   margin-top: 0;
 }
@@ -2751,7 +3386,7 @@ function getMaxSettingsPanelHeight(): number {
 }
 
 .guide-card {
-  padding: 10px 12px;
+  padding: 9px 10px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.035);

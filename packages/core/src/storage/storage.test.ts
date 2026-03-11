@@ -65,6 +65,17 @@ describe("storage", () => {
       expect(loaded[1].id).toBe("a2")
     })
 
+    it("hides resolved and dismissed annotations from active loads", () => {
+      saveAnnotations("/page", [
+        makeAnnotation("pending"),
+        { ...makeAnnotation("resolved"), status: "resolved" as const },
+        { ...makeAnnotation("dismissed"), status: "dismissed" as const },
+      ], { storage })
+
+      const loaded = loadAnnotations("/page", { storage })
+      expect(loaded.map((annotation) => annotation.id)).toEqual(["pending"])
+    })
+
     it("scopes by pathname", () => {
       saveAnnotations("/a", [makeAnnotation("a1")], { storage })
       saveAnnotations("/b", [makeAnnotation("b1")], { storage })
@@ -125,6 +136,14 @@ describe("storage", () => {
       const unsynced = getUnsyncedAnnotations("/", "session-1", { storage })
       expect(unsynced).toHaveLength(1)
       expect(unsynced[0].id).toBe("a2")
+    })
+
+    it("does not requeue annotations that already belong to another session", () => {
+      const synced = { ...makeAnnotation("a1"), _syncedTo: "session-1" }
+      saveAnnotations("/", [synced], { storage })
+
+      const unsynced = getUnsyncedAnnotations("/", "session-2", { storage })
+      expect(unsynced).toEqual([])
     })
 
     it("marks annotations as synced", () => {

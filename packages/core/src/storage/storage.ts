@@ -39,6 +39,14 @@ function filterRecent<T extends { timestamp?: string | number }>(
   })
 }
 
+function filterActiveAnnotations<T>(entries: T[]): T[] {
+  return entries.filter((entry) => {
+    if (!entry || typeof entry !== "object") return true
+    const status = (entry as { status?: unknown }).status
+    return status !== "resolved" && status !== "dismissed"
+  })
+}
+
 export function getStorageKey(
   pathname: string,
   options: StorageOptions = {},
@@ -125,7 +133,7 @@ export function loadAnnotations<T extends { timestamp?: string | number } = Anno
     )
     if (!raw) return []
     const parsed = JSON.parse(raw) as T[]
-    return filterRecent(parsed, options.retentionDays ?? DEFAULT_RETENTION_DAYS)
+    return filterActiveAnnotations(filterRecent(parsed, options.retentionDays ?? DEFAULT_RETENTION_DAYS))
   } catch {
     return []
   }
@@ -226,15 +234,11 @@ export function markAnnotationsSynced(
 
 export function getUnsyncedAnnotations(
   pathname: string,
-  sessionId?: string,
+  _sessionId?: string,
   options: StorageOptions = {},
 ): AnnotationV2[] {
   const annotations = loadAnnotations<AnnotationV2 & { _syncedTo?: string }>(pathname, options)
-  return annotations.filter((a) => {
-    if (!a._syncedTo) return true
-    if (sessionId && a._syncedTo !== sessionId) return true
-    return false
-  })
+  return annotations.filter((annotation) => !annotation._syncedTo)
 }
 
 export function clearSyncMarkers(

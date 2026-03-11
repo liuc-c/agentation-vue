@@ -203,4 +203,65 @@ describe("startHttpServer", () => {
       error: "Use POST /v2/annotations/:id/claim to enter processing state",
     })
   })
+
+  it("omits closed empty sessions from session summaries", async () => {
+    const baseUrl = await createApiBaseUrl()
+    if (!baseUrl) return
+
+    const emptySessionResponse = await fetch(`${baseUrl}/v2/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: "http://localhost:5173/",
+        projectId: "demo-app",
+      }),
+    })
+    const emptySession = await emptySessionResponse.json() as { id: string }
+
+    await fetch(`${baseUrl}/v2/sessions/${emptySession.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "closed",
+      }),
+    })
+
+    const keptSessionResponse = await fetch(`${baseUrl}/v2/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: "http://localhost:5173/checkout",
+        projectId: "demo-app",
+      }),
+    })
+    const keptSession = await keptSessionResponse.json() as { id: string }
+
+    await fetch(`${baseUrl}/v2/sessions/${keptSession.id}/annotations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(makeAnnotation("annotation-kept")),
+    })
+
+    await fetch(`${baseUrl}/v2/sessions/${keptSession.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "closed",
+      }),
+    })
+
+    const sessionsResponse = await fetch(`${baseUrl}/v2/sessions?projectFilter=demo-app`)
+    const sessions = await sessionsResponse.json() as Array<{
+      id: string
+      status: string
+      annotationCount: number
+    }>
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]).toMatchObject({
+      id: keptSession.id,
+      status: "closed",
+      annotationCount: 1,
+    })
+  })
 })

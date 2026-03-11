@@ -8,6 +8,7 @@ const core = vi.hoisted(() => ({
   deleteAnnotation: vi.fn(),
   getSession: vi.fn(),
   getUnsyncedAnnotations: vi.fn(),
+  listSessions: vi.fn(),
   loadSessionId: vi.fn(),
   markAnnotationsSynced: vi.fn(),
   resolveV2Endpoint: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock("@liuovo/agentation-vue-core", () => ({
   deleteAnnotation: core.deleteAnnotation,
   getSession: core.getSession,
   getUnsyncedAnnotations: core.getUnsyncedAnnotations,
+  listSessions: core.listSessions,
   loadSessionId: core.loadSessionId,
   markAnnotationsSynced: core.markAnnotationsSynced,
   resolveV2Endpoint: core.resolveV2Endpoint,
@@ -60,6 +62,7 @@ describe("createRuntimeSyncBridge", () => {
       annotations: [],
     })
     core.getUnsyncedAnnotations.mockReturnValue([])
+    core.listSessions.mockResolvedValue([])
     core.resolveV2Endpoint.mockReturnValue("http://localhost:4748/v2")
     core.updateSession.mockResolvedValue({
       id: "sess-existing",
@@ -100,7 +103,7 @@ describe("createRuntimeSyncBridge", () => {
     bridge.dispose()
   })
 
-  it("creates a new session when the cached session belongs to another project", async () => {
+  it("clears a cached session from another project without creating an empty replacement", async () => {
     core.getSession.mockResolvedValueOnce({
       id: "sess-existing",
       url: "http://localhost:5173/",
@@ -136,18 +139,13 @@ describe("createRuntimeSyncBridge", () => {
 
     expect(core.updateSession).not.toHaveBeenCalled()
     expect(core.clearSessionId).toHaveBeenCalledWith("/", {})
-    expect(core.createSession).toHaveBeenCalledWith(
-      "http://localhost:4748",
-      "http://localhost:3000/",
-      "agentation-vue",
-      undefined,
-    )
-    expect(core.saveSessionId).toHaveBeenCalledWith("/", "sess-new", {})
+    expect(core.createSession).not.toHaveBeenCalled()
+    expect(core.saveSessionId).not.toHaveBeenCalled()
 
     bridge.dispose()
   })
 
-  it("creates a new session when the cached session was closed", async () => {
+  it("clears a closed cached session without creating an empty replacement", async () => {
     core.getSession.mockResolvedValueOnce({
       id: "sess-existing",
       url: "http://localhost:5173/",
@@ -182,13 +180,35 @@ describe("createRuntimeSyncBridge", () => {
     await bridge.init()
 
     expect(core.clearSessionId).toHaveBeenCalledWith("/", {})
-    expect(core.createSession).toHaveBeenCalledWith(
-      "http://localhost:4748",
-      "http://localhost:3000/",
-      "agentation-vue",
-      undefined,
-    )
-    expect(core.saveSessionId).toHaveBeenCalledWith("/", "sess-new", {})
+    expect(core.createSession).not.toHaveBeenCalled()
+    expect(core.saveSessionId).not.toHaveBeenCalled()
+
+    bridge.dispose()
+  })
+
+  it("does not create a session during init when no annotations exist yet", async () => {
+    core.loadSessionId.mockReturnValue(null)
+    core.getUnsyncedAnnotations.mockReturnValue([])
+
+    const { createRuntimeSyncBridge } = await import("./sync.ts")
+    const bridge = createRuntimeSyncBridge({
+      endpoint: "http://localhost:4748",
+      projectId: "agentation-vue",
+      autoSync: true,
+      debounceMs: 0,
+      ensureServer: false,
+    }, {
+      options: {},
+      load: () => [],
+      save: () => undefined,
+      clear: () => undefined,
+    })
+
+    await bridge.init()
+
+    expect(core.createSession).not.toHaveBeenCalled()
+    expect(core.saveSessionId).not.toHaveBeenCalled()
+    expect(core.listSessions).toHaveBeenCalledWith("http://localhost:4748", "agentation-vue")
 
     bridge.dispose()
   })
@@ -288,6 +308,118 @@ describe("createRuntimeSyncBridge", () => {
       }),
     )
     expect(core.markAnnotationsSynced).toHaveBeenCalledWith("/", ["annotation-new"], "sess-new", {})
+
+    bridge.dispose()
+  })
+
+  it("closes stale active sessions that have no open annotations", async () => {
+    core.getSession.mockImplementation(async (_endpoint: string, sessionId: string) => {
+      if (sessionId === "sess-existing") {
+        return {
+          id: "sess-existing",
+          url: "http://localhost:3000/",
+          status: "active",
+          createdAt: "2026-03-09T00:00:00.000Z",
+          projectId: "agentation-vue",
+          annotations: [],
+        }
+      }
+
+      return {
+        id: "sess-stale",
+        url: "http://localhost:3000/",
+        status: "active",
+        createdAt: "2026-03-08T00:00:00.000Z",
+        projectId: "agentation-vue",
+        annotations: [{
+          id: "annotation-resolved",
+          schemaVersion: 1 as const,
+          timestamp: "2026-03-08T00:00:00.000Z",
+          url: "http://localhost:3000/",
+          elementSelector: "button.primary",
+          comment: "Resolved already",
+          status: "resolved" as const,
+          source: {
+            framework: "vue" as const,
+            componentName: "App",
+            file: "src/App.vue",
+            line: 12,
+            resolver: "test",
+          },
+        }],
+      }
+    })
+    core.listSessions.mockResolvedValue([{
+      id: "sess-existing",
+      url: "http://localhost:3000/",
+      status: "active",
+      createdAt: "2026-03-09T00:00:00.000Z",
+      projectId: "agentation-vue",
+    }, {
+      id: "sess-stale",
+      url: "http://localhost:3000/",
+      status: "active",
+      createdAt: "2026-03-08T00:00:00.000Z",
+      projectId: "agentation-vue",
+    }])
+
+    const { createRuntimeSyncBridge } = await import("./sync.ts")
+    const bridge = createRuntimeSyncBridge({
+      endpoint: "http://localhost:4748",
+      projectId: "agentation-vue",
+      autoSync: true,
+      debounceMs: 0,
+      ensureServer: false,
+    }, {
+      options: {},
+      load: () => [],
+      save: () => undefined,
+      clear: () => undefined,
+    })
+
+    await bridge.init()
+
+    expect(core.updateSession).toHaveBeenCalledWith("http://localhost:4748", "sess-stale", {
+      status: "closed",
+    })
+
+    bridge.dispose()
+  })
+
+  it("closes the current session when the page is hidden", async () => {
+    core.getSession.mockResolvedValue({
+      id: "sess-existing",
+      url: "http://localhost:3000/",
+      status: "active",
+      createdAt: "2026-03-09T00:00:00.000Z",
+      projectId: "agentation-vue",
+      annotations: [],
+    })
+
+    const { createRuntimeSyncBridge } = await import("./sync.ts")
+    const bridge = createRuntimeSyncBridge({
+      endpoint: "http://localhost:4748",
+      projectId: "agentation-vue",
+      autoSync: true,
+      debounceMs: 0,
+      ensureServer: false,
+    }, {
+      options: {},
+      load: () => [],
+      save: () => undefined,
+      clear: () => undefined,
+    })
+
+    await bridge.init()
+    window.dispatchEvent(new Event("pagehide"))
+    await Promise.resolve()
+
+    expect(core.clearSessionId).toHaveBeenCalledWith("/", {})
+    expect(core.updateSession).toHaveBeenCalledWith("http://localhost:4748", "sess-existing", {
+      status: "closed",
+    }, {
+      keepalive: true,
+    })
 
     bridge.dispose()
   })

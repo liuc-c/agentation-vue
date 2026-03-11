@@ -11,6 +11,16 @@ const props = defineProps<{
 const actionLabel = computed(() =>
   props.tone === "primary" ? "Open review" : "Preview change",
 )
+
+const isPrimaryAction = computed(() => props.tone === "primary")
+
+const actionButtonListeners = computed(() =>
+  isPrimaryAction.value ? {} : { click: handleActionClick },
+)
+
+const handleActionClick = () => {
+  window.alert(actionLabel.value)
+}
 </script>
 
 <template>
@@ -18,7 +28,11 @@ const actionLabel = computed(() =>
     <StatusPill :tone="tone" />
     <h3>{{ label }}</h3>
     <p>{{ description }}</p>
-    <button class="action-button" type="button">
+    <button
+      :class="['action-button', isPrimaryAction ? 'action-button-primary' : 'action-button-secondary']"
+      type="button"
+      v-on="actionButtonListeners"
+    >
       {{ actionLabel }}
     </button>
   </article>
@@ -32,6 +46,11 @@ const actionLabel = computed(() =>
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 22px;
   background: linear-gradient(180deg, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.96));
+  transition: box-shadow 0.2s ease;
+}
+
+.card:hover {
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.3);
 }
 
 h3 {
@@ -54,5 +73,13 @@ p {
   color: #0f172a;
   font-weight: 700;
   cursor: pointer;
+}
+
+.action-button-primary {
+  background: #22c55e;
+}
+
+.action-button-secondary {
+  background: #ef4444;
 }
 </style>

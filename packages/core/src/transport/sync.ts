@@ -1,4 +1,4 @@
-import type { AnnotationV2, Session, SessionWithAnnotations } from "../types/index.ts"
+import type { AnnotationV2, Session, SessionStatus, SessionWithAnnotations } from "../types/index.ts"
 
 /**
  * Resolves the V2 API base URL from a user-provided endpoint.
@@ -13,8 +13,12 @@ export function resolveV2Endpoint(endpoint: string): string {
   return resolveV2Base(endpoint)
 }
 
-export async function listSessions(endpoint: string): Promise<Session[]> {
-  const response = await fetch(`${resolveV2Base(endpoint)}/sessions`)
+export async function listSessions(
+  endpoint: string,
+  projectFilter?: string,
+): Promise<Session[]> {
+  const query = projectFilter ? `?projectFilter=${encodeURIComponent(projectFilter)}` : ""
+  const response = await fetch(`${resolveV2Base(endpoint)}/sessions${query}`)
   if (!response.ok) {
     throw new Error(`Failed to list sessions: ${response.status}`)
   }
@@ -52,12 +56,14 @@ export async function getSession(
 export async function updateSession(
   endpoint: string,
   sessionId: string,
-  data: { projectId?: string; metadata?: Record<string, unknown> },
+  data: { projectId?: string; metadata?: Record<string, unknown>; status?: SessionStatus },
+  options?: { keepalive?: boolean },
 ): Promise<Session> {
   const response = await fetch(`${resolveV2Base(endpoint)}/sessions/${sessionId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
+    keepalive: options?.keepalive,
   })
   if (!response.ok) {
     throw new Error(`Failed to update session: ${response.status}`)
