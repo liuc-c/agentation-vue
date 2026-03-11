@@ -60,7 +60,7 @@ describe("agentation plugin shared companion wiring", () => {
 
     expect(ensureSharedCompanionServerMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        endpoint: "http://localhost:4748",
+        endpoint: "http://127.0.0.1:4748",
       }),
       expect.any(Function),
       expect.objectContaining({

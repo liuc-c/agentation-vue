@@ -1,4 +1,8 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import {
+  spawn,
+  type ChildProcessWithoutNullStreams,
+  type SpawnOptionsWithoutStdio,
+} from "node:child_process"
 import { Readable, Writable } from "node:stream"
 import {
   ClientSideConnection,
@@ -48,6 +52,40 @@ export function selectPermissionResponse(
   }
 }
 
+export function shouldUseWindowsShell(
+  command: string,
+  platform = process.platform,
+): boolean {
+  if (platform !== "win32") return false
+
+  const normalized = command.trim().toLowerCase()
+  return normalized.endsWith(".cmd") || normalized.endsWith(".bat")
+}
+
+export function buildSpawnOptions(
+  command: string,
+  cwd: string,
+  env: Record<string, string>,
+  platform = process.platform,
+): SpawnOptionsWithoutStdio {
+  const useWindowsShell = shouldUseWindowsShell(command, platform)
+
+  return {
+    cwd,
+    env: {
+      ...process.env,
+      ...env,
+    },
+    stdio: "pipe",
+    ...(useWindowsShell
+      ? {
+          shell: true,
+          windowsHide: true,
+        }
+      : {}),
+  }
+}
+
 export class AcpRuntime {
   private readonly command: string
   private readonly args: string[]
@@ -73,14 +111,7 @@ export class AcpRuntime {
   async start(): Promise<void> {
     if (this.connection) return
 
-    const child = this.spawnImpl(this.command, this.args, {
-      cwd: this.cwd,
-      env: {
-        ...process.env,
-        ...this.env,
-      },
-      stdio: "pipe",
-    })
+    const child = this.spawnImpl(this.command, this.args, buildSpawnOptions(this.command, this.cwd, this.env))
 
     this.child = child
     this.exitReason = null

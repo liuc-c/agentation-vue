@@ -16,7 +16,7 @@ describe("resolveOptions", () => {
       enabled: true,
       autoSend: false,
     })
-    expect(resolveMcpEndpoint(resolved.sync as Exclude<typeof resolved.sync, false>)).toBe("http://localhost:4748")
+    expect(resolveMcpEndpoint(resolved.sync as Exclude<typeof resolved.sync, false>)).toBe("http://127.0.0.1:4748")
   })
 
   it("merges partial sync config with defaults", () => {
@@ -27,12 +27,12 @@ describe("resolveOptions", () => {
     }, "serve")
 
     expect(resolved.sync).toMatchObject({
-      endpoint: "http://localhost:5000",
+      endpoint: "http://127.0.0.1:5000",
       autoSync: true,
       debounceMs: 400,
       ensureServer: true,
     })
-    expect(resolveMcpEndpoint(resolved.sync as Exclude<typeof resolved.sync, false>)).toBe("http://localhost:5000")
+    expect(resolveMcpEndpoint(resolved.sync as Exclude<typeof resolved.sync, false>)).toBe("http://127.0.0.1:5000")
   })
 
   it("infers projectId from the Vite root directory", () => {
@@ -56,6 +56,17 @@ describe("resolveOptions", () => {
     expect(resolved.sync).toMatchObject({
       projectId: "custom-project",
     })
+  })
+
+  it("normalizes deprecated localhost MCP endpoints to the explicit loopback address", () => {
+    const resolved = resolveOptions({
+      sync: {
+        endpoint: "http://localhost:5000",
+        mcpEndpoint: "http://localhost:6000/",
+      },
+    }, "serve")
+
+    expect(resolveMcpEndpoint(resolved.sync as Exclude<typeof resolved.sync, false>)).toBe("http://127.0.0.1:6000")
   })
 
   it("keeps the inferred projectId available even when sync is disabled", () => {

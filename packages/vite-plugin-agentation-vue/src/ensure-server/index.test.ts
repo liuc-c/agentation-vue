@@ -127,11 +127,31 @@ describe("ensureSharedCompanionServer", () => {
     await registration.dispose()
     harness.cleanup()
   })
+
+  it("reports likely causes when the auto-started child never becomes healthy", async () => {
+    const harness = createHarness({
+      waitReady: false,
+    })
+
+    const registration = await harness.register("playgrounds/a")
+
+    const startupLog = harness.findLog("shared companion still starting")
+    const exitLog = harness.findLog("shared companion exited")
+
+    expect(startupLog).toContain("childPid=7001")
+    expect(startupLog).toContain("loopback host resolves differently")
+    expect(exitLog).toContain("childPid=7001")
+    expect(exitLog).toContain("signal=SIGTERM")
+
+    await registration.dispose()
+    harness.cleanup()
+  })
 })
 
 function createHarness(options?: {
   healthy?: boolean
   compatible?: boolean
+  waitReady?: boolean
 }) {
   const registryRootDir = mkdtempSync(join(tmpdir(), "agentation-shared-server-"))
   const logs: string[] = []
@@ -139,6 +159,7 @@ function createHarness(options?: {
   const spawnedChildren: FakeChildProcess[] = []
   let healthy = options?.healthy ?? false
   let compatible = options?.compatible ?? true
+  let waitReady = options?.waitReady
   let childPid = 7000
   let instanceId = 0
 
@@ -163,7 +184,7 @@ function createHarness(options?: {
     clearInterval: globalThis.clearInterval.bind(globalThis),
     isServerHealthy: vi.fn(async () => healthy),
     hasSessionEventsCapability: vi.fn(async () => compatible),
-    waitForSharedServer: vi.fn(async () => healthy),
+    waitForSharedServer: vi.fn(async () => waitReady ?? healthy),
     spawnSharedServer,
     isProcessAlive: (pid: number) => pid === process.pid || activeChildPids.has(pid),
     killProcess: vi.fn((pid: number) => {

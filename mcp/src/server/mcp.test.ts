@@ -453,4 +453,39 @@ describe("startMcpHttpServer", () => {
       ],
     })
   })
+
+  it("allows private-network CORS preflights for MCP transport routes", async () => {
+    const mcpServer = startMcpHttpServer(0)
+    servers.push(mcpServer)
+
+    if (!mcpServer.listening) {
+      try {
+        await Promise.race([
+          once(mcpServer, "listening"),
+          once(mcpServer, "error").then(([error]) => Promise.reject(error)),
+        ])
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EPERM") {
+          return
+        }
+        throw error
+      }
+    }
+
+    const mcpPort = getServerPort(mcpServer)
+    const response = await fetch(`http://localhost:${mcpPort}/mcp`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://proxy.example.com",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Content-Type, Mcp-Session-Id",
+        "Access-Control-Request-Private-Network": "true",
+      },
+    })
+
+    expect(response.status).toBe(204)
+    expect(response.headers.get("access-control-allow-origin")).toBe("*")
+    expect(response.headers.get("access-control-allow-private-network")).toBe("true")
+    expect(response.headers.get("access-control-expose-headers")).toContain("Mcp-Session-Id")
+  })
 })

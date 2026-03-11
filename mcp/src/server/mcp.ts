@@ -1049,7 +1049,9 @@ function handleCors(res: ServerResponse): void {
     "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Accept, Mcp-Session-Id",
     "Access-Control-Expose-Headers": "Mcp-Session-Id",
+    "Access-Control-Allow-Private-Network": "true",
     "Access-Control-Max-Age": "86400",
+    Vary: "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
   })
   res.end()
 }
@@ -1075,6 +1077,8 @@ async function handleStreamableHttp(req: IncomingMessage, res: ServerResponse): 
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id")
   res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id")
+  res.setHeader("Access-Control-Allow-Private-Network", "true")
+  res.setHeader("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network")
 
   if (method === "POST") {
     let transport: StreamableHTTPServerTransport
@@ -1167,6 +1171,13 @@ async function handleLegacySse(req: IncomingMessage, res: ServerResponse): Promi
   const method = req.method || "GET"
   const url = new URL(req.url || "/", "http://localhost")
 
+  res.setHeader("Access-Control-Allow-Origin", "*")
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id")
+  res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id")
+  res.setHeader("Access-Control-Allow-Private-Network", "true")
+  res.setHeader("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network")
+
   if (method === "GET") {
     const transport = new SSEServerTransport("/messages", res)
     const server = createToolServer()
@@ -1251,7 +1262,12 @@ export async function handleMcpTransportRequest(
     return
   }
 
-  res.writeHead(404, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" })
+  res.writeHead(404, {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Private-Network": "true",
+    Vary: "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
+  })
   res.end(JSON.stringify({ error: "Not found" }))
 }
 
@@ -1270,7 +1286,12 @@ export function startMcpHttpServer(port: number, baseUrl?: string): HttpServer {
     }
 
     if (pathname === "/health" && method === "GET") {
-      res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" })
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Private-Network": "true",
+        Vary: "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
+      })
       res.end(JSON.stringify({
         status: "ok",
         transport: buildMcpTransportUrls(url.origin),
@@ -1283,7 +1304,12 @@ export function startMcpHttpServer(port: number, baseUrl?: string): HttpServer {
       return handleMcpTransportRequest(req, res, pathname)
     }
 
-    res.writeHead(404, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" })
+    res.writeHead(404, {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Private-Network": "true",
+      Vary: "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
+    })
     res.end(JSON.stringify({ error: "Not found" }))
   })
 

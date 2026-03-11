@@ -147,7 +147,9 @@ function sendJson(res: ServerResponse, status: number, data: unknown): void {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Accept, Last-Event-ID",
+    "Access-Control-Allow-Private-Network": "true",
+    Vary: "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
   })
   res.end(JSON.stringify(data))
 }
@@ -161,7 +163,9 @@ function handleCors(res: ServerResponse): void {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Accept, Last-Event-ID",
+    "Access-Control-Allow-Private-Network": "true",
     "Access-Control-Max-Age": "86400",
+    Vary: "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
   })
   res.end()
 }
@@ -243,6 +247,8 @@ async function proxyToCloud(
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
         "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Private-Network": "true",
+        Vary: "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
       })
 
       const reader = response.body?.getReader()
@@ -269,7 +275,9 @@ async function proxyToCloud(
       "Content-Type": response.headers.get("content-type") || "application/json",
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Headers": "Content-Type, Accept, Last-Event-ID",
+      "Access-Control-Allow-Private-Network": "true",
+      Vary: "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
     })
     res.end(data)
   } catch (error) {
@@ -293,6 +301,8 @@ function writeSseHeaders(res: ServerResponse): void {
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
     "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Private-Network": "true",
+    Vary: "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
   })
 }
 

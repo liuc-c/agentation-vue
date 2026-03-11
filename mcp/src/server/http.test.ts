@@ -264,4 +264,53 @@ describe("startHttpServer", () => {
       annotationCount: 1,
     })
   })
+
+  it("allows private-network CORS preflights for browser sync routes", async () => {
+    const baseUrl = await createApiBaseUrl()
+    if (!baseUrl) return
+
+    const response = await fetch(`${baseUrl}/v2/sessions`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://proxy.example.com",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Content-Type",
+        "Access-Control-Request-Private-Network": "true",
+      },
+    })
+
+    expect(response.status).toBe(204)
+    expect(response.headers.get("access-control-allow-origin")).toBe("*")
+    expect(response.headers.get("access-control-allow-private-network")).toBe("true")
+    expect(response.headers.get("access-control-allow-methods")).toContain("POST")
+  })
+
+  it("includes private-network headers on session event streams", async () => {
+    const baseUrl = await createApiBaseUrl()
+    if (!baseUrl) return
+
+    const sessionResponse = await fetch(`${baseUrl}/v2/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: "http://localhost:5173/",
+        projectId: "demo-app",
+      }),
+    })
+    const session = await sessionResponse.json() as { id: string }
+
+    const response = await fetch(`${baseUrl}/v2/sessions/${session.id}/events`, {
+      headers: {
+        Origin: "https://proxy.example.com",
+        Accept: "text/event-stream",
+      },
+    })
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toContain("text/event-stream")
+    expect(response.headers.get("access-control-allow-origin")).toBe("*")
+    expect(response.headers.get("access-control-allow-private-network")).toBe("true")
+
+    await response.body?.cancel()
+  })
 })

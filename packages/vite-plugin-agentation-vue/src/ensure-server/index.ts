@@ -17,6 +17,7 @@ const LOCK_RETRY_MS = 60
 const LOCK_TIMEOUT_MS = 5000
 const STALE_LOCK_MS = 5000
 const WATCHDOG_INTERVAL_MS = 1500
+const STARTUP_TIMEOUT_MS = 8000
 
 interface SharedCompanionInstanceMeta {
   projectId?: string
@@ -307,6 +308,8 @@ class SharedCompanionCoordinator implements SharedCompanionRegistration {
     }
 
     if (healthy && !compatible) {
+      const ownedChildPid = owner?.id === this.instance.id ? this.child?.pid : undefined
+
       if (owner?.id === this.instance.id) {
         this.stopOwnedChild()
         await this.releaseOwnership()
@@ -314,7 +317,7 @@ class SharedCompanionCoordinator implements SharedCompanionRegistration {
 
       this.report(
         "shared companion incompatible ⚠️",
-        `${this.endpoint} answered /health but is missing the required /v2 session event API`,
+        formatIncompatibleServiceDetail(this.endpoint, ownedChildPid),
         `incompatible:${this.endpoint}`,
       )
       return
@@ -403,7 +406,7 @@ class SharedCompanionCoordinator implements SharedCompanionRegistration {
       if (!ready) {
         this.report(
           "shared companion still starting ⏳",
-          "health checks not ready yet; if this persists, start agentation-vue-mcp server manually",
+          formatStartupFailureDetail(this.endpoint, child.pid),
           `starting:${this.endpoint}`,
         )
         return
@@ -411,7 +414,7 @@ class SharedCompanionCoordinator implements SharedCompanionRegistration {
 
       this.report(
         "shared companion incompatible ⚠️",
-        `${this.endpoint} answered /health but is missing the required /v2 session event API`,
+        formatIncompatibleServiceDetail(this.endpoint, child.pid),
         `incompatible:${this.endpoint}`,
       )
       return
@@ -431,13 +434,13 @@ class SharedCompanionCoordinator implements SharedCompanionRegistration {
     child.once?.("error", (error) => {
       this.report(
         "shared companion child error ⚠️",
-        error instanceof Error ? error.message : String(error),
+        formatChildProcessErrorDetail(child.pid, error),
         `child-error:${this.endpoint}`,
         true,
       )
     })
 
-    child.once?.("exit", (_code, signal) => {
+    child.once?.("exit", (code, signal) => {
       if (this.child === child) {
         this.child = null
       }
@@ -448,7 +451,7 @@ class SharedCompanionCoordinator implements SharedCompanionRegistration {
 
       this.report(
         "shared companion exited ⚠️",
-        `${this.endpoint} startedBy=${this.instanceLabel}${signal ? ` signal=${String(signal)}` : ""}`,
+        formatChildExitDetail(this.endpoint, this.instanceLabel, child.pid, code, signal),
         `child-exit:${this.endpoint}`,
         true,
       )
@@ -555,6 +558,67 @@ function formatInstanceLabel(instance: Pick<SharedServerInstanceRecord, "pid" | 
   }
 
   return `${primary} (${details.join(", ")})`
+}
+
+function formatChildProcessErrorDetail(
+  childPid: number | undefined,
+  error: unknown,
+): string {
+  const description = error instanceof Error ? error.message : String(error)
+  return childPid != null
+    ? `childPid=${childPid} ${description}`
+    : description
+}
+
+function formatChildExitDetail(
+  endpoint: string,
+  instanceLabel: string,
+  childPid: number | undefined,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+): string {
+  const details = [`${endpoint} startedBy=${instanceLabel}`]
+
+  if (childPid != null) {
+    details.push(`childPid=${childPid}`)
+  }
+  if (code != null) {
+    details.push(`code=${code}`)
+  }
+  if (signal) {
+    details.push(`signal=${String(signal)}`)
+  }
+
+  return details.join(" ")
+}
+
+function formatStartupFailureDetail(
+  endpoint: string,
+  childPid?: number,
+): string {
+  const details = [`${endpoint} did not pass /health within ${STARTUP_TIMEOUT_MS}ms after auto-start`]
+
+  if (childPid != null) {
+    details.push(`childPid=${childPid}`)
+  }
+
+  details.push("the child likely exited early, another process is bound to the port, or the configured loopback host resolves differently on this machine")
+  details.push("if this persists, start agentation-vue-mcp server manually and verify the same endpoint answers both /health and /v2/sessions/:id/events")
+  return details.join("; ")
+}
+
+function formatIncompatibleServiceDetail(
+  endpoint: string,
+  childPid?: number,
+): string {
+  const details = [`${endpoint} answered /health but is missing the required /v2 session event API`]
+
+  if (childPid != null) {
+    details.push(`childPid=${childPid}`)
+  }
+
+  details.push("this usually means another service is already bound to the configured port or a different loopback interface answered the probe")
+  return details.join("; ")
 }
 
 function createEmptyRegistry(endpoint: string): SharedServerRegistry {

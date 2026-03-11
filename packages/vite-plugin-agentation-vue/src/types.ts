@@ -12,7 +12,7 @@ import type { Locale } from "@liuovo/agentation-vue-ui"
 // ---------------------------------------------------------------------------
 
 export interface AgentationVueSyncOptions {
-  /** Unified companion endpoint URL (default: "http://localhost:4748") */
+  /** Unified companion endpoint URL (default: "http://127.0.0.1:4748") */
   endpoint: string
   /** @deprecated MCP now shares the same endpoint as the V2 API companion. */
   mcpEndpoint?: string
@@ -37,8 +37,32 @@ export interface AgentationVueAgentOptions {
   autoSend?: boolean
 }
 
+function trimTrailingSlashes(input: string): string {
+  return input.trim().replace(/\/+$/, "")
+}
+
+export function normalizeLoopbackEndpoint(endpoint: string): string {
+  const trimmed = trimTrailingSlashes(endpoint)
+
+  try {
+    const url = new URL(trimmed)
+
+    // Prefer the explicit IPv4 loopback address for local companions.
+    // This avoids localhost resolving to a different loopback interface
+    // than the auto-started server on some Windows setups.
+    if (url.protocol === "http:" && url.hostname === "localhost") {
+      url.hostname = "127.0.0.1"
+      return trimTrailingSlashes(url.toString())
+    }
+  } catch {
+    // Preserve user input for non-URL values and let downstream validation handle it.
+  }
+
+  return trimmed
+}
+
 export const DEFAULT_AGENTATION_SYNC_OPTIONS: Readonly<Required<Omit<AgentationVueSyncOptions, "mcpEndpoint" | "projectId">>> = {
-  endpoint: "http://localhost:4748",
+  endpoint: normalizeLoopbackEndpoint("http://localhost:4748"),
   autoSync: true,
   debounceMs: 400,
   ensureServer: true,
@@ -109,11 +133,15 @@ export function resolveOptions(
     enabled: raw.agent?.enabled ?? command === "serve",
     autoSend: raw.agent?.autoSend ?? false,
   }
+  const resolvedSyncEndpoint = configuredSync?.endpoint
+    ? normalizeLoopbackEndpoint(configuredSync.endpoint)
+    : DEFAULT_AGENTATION_SYNC_OPTIONS.endpoint
   const resolvedSync = raw.sync === false
     ? false
     : {
         ...DEFAULT_AGENTATION_SYNC_OPTIONS,
         ...configuredSync,
+        endpoint: resolvedSyncEndpoint,
         projectId,
       }
 
@@ -131,7 +159,7 @@ export function resolveOptions(
 }
 
 export function resolveMcpEndpoint(sync: AgentationVueSyncOptions): string | undefined {
-  return (sync.mcpEndpoint || sync.endpoint).replace(/\/+$/, "")
+  return normalizeLoopbackEndpoint(sync.mcpEndpoint || sync.endpoint)
 }
 
 // ---------------------------------------------------------------------------

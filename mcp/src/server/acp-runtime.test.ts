@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 import type { PermissionOption } from "@agentclientprotocol/sdk"
-import { selectPermissionResponse } from "./acp-runtime.js"
+import {
+  buildSpawnOptions,
+  selectPermissionResponse,
+  shouldUseWindowsShell,
+} from "./acp-runtime.js"
 
 function option(
   optionId: string,
@@ -54,5 +58,54 @@ describe("selectPermissionResponse", () => {
         outcome: "cancelled",
       },
     })
+  })
+})
+
+describe("shouldUseWindowsShell", () => {
+  it("enables shell mode for cmd and bat launchers on Windows", () => {
+    expect(shouldUseWindowsShell("C:\\Program Files\\nodejs\\npx.CMD", "win32")).toBe(true)
+    expect(shouldUseWindowsShell("C:\\tools\\agent.bat", "win32")).toBe(true)
+  })
+
+  it("keeps direct executables and non-Windows launchers unchanged", () => {
+    expect(shouldUseWindowsShell("C:\\Program Files\\nodejs\\node.exe", "win32")).toBe(false)
+    expect(shouldUseWindowsShell("/usr/bin/npx", "linux")).toBe(false)
+  })
+})
+
+describe("buildSpawnOptions", () => {
+  it("uses shell mode for Windows cmd launchers", () => {
+    const options = buildSpawnOptions(
+      "C:\\Program Files\\nodejs\\npx.CMD",
+      "C:\\work\\demo",
+      { OPENAI_API_KEY: "test-key" },
+      "win32",
+    )
+
+    expect(options).toMatchObject({
+      cwd: "C:\\work\\demo",
+      stdio: "pipe",
+      shell: true,
+      windowsHide: true,
+    })
+    expect(options.env).toMatchObject({
+      OPENAI_API_KEY: "test-key",
+    })
+  })
+
+  it("avoids shell mode for direct executables", () => {
+    const options = buildSpawnOptions(
+      "/usr/bin/codex",
+      "/tmp/demo",
+      {},
+      "linux",
+    )
+
+    expect(options).toMatchObject({
+      cwd: "/tmp/demo",
+      stdio: "pipe",
+    })
+    expect(options).not.toHaveProperty("shell")
+    expect(options).not.toHaveProperty("windowsHide")
   })
 })
