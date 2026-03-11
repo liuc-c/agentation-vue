@@ -26,7 +26,7 @@ export type McpServerConfig = McpServerStdio
 export type AcpPromptResult = PromptResponse
 export type SessionUpdateNotification = SessionNotification
 
-const CLIENT_VERSION = "0.0.11"
+const CLIENT_VERSION = "0.0.12"
 
 export function selectPermissionResponse(
   options: PermissionOption[],

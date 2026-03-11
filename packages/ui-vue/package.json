@@ -1,6 +1,6 @@
 {
   "name": "@liuovo/agentation-vue-ui",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "description": "Vue 3 UI components: toolbar, overlay, popover, highlight & marker layers",
   "license": "PolyForm-Shield-1.0.0",
   "type": "module",
